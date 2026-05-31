@@ -5,33 +5,39 @@
 
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
-      "Remotes":
-      {
-        "$path": "src/ReplicatedStorage/Remotes"
-      },
-      "Modules":
-      {
+      "Modules": {
         "$path": "src/ReplicatedStorage/Modules"
+      },
+      "Remotes": {
+        "$className": "Folder"
       }
     },
 
     "ServerScriptService": {
       "$className": "ServerScriptService",
-      "Services":
-      {
+      "Core": {
+        "$path": "src/ServerScriptService/Core"
+      },
+      "Services": {
         "$path": "src/ServerScriptService/Services"
       }
     },
 
     "StarterPlayer": {
       "$className": "StarterPlayer",
-      "StarterPlayerScripts":
-      {
-        "$className": "StarterPlayerScripts"
-      },
-      "StarterCharacterScripts":
-      {
-        "$className": "StarterCharacterScripts"
+      "StarterPlayerScripts": {
+        "$path": "src/StarterPlayer/StarterPlayerScripts"
+      }
+    },
+
+    "StarterGui": {
+      "$path": "src/StarterGui"
+    },
+
+    "Workspace": {
+      "$className": "Workspace",
+      "Map": {
+        "$path": "src/Workspace/Map"
       }
     }
   }

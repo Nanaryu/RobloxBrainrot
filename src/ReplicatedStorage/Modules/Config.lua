@@ -12,6 +12,12 @@ Config.GRID_HEIGHT     = 64      -- number of tiles vertically
 -- ─── Movement ─────────────────────────────────────────────────────────────────
 Config.MOVE_TWEEN_TIME = 0.18    -- seconds to slide between tiles
 
+-- ─── Camera ───────────────────────────────────────────────────────────────────
+Config.CAM_DISTANCE         = 40       -- studs from character
+Config.CAM_HORIZONTAL_ANGLE = 45       -- degrees, rotated around Y axis
+Config.CAM_VERTICAL_ANGLE   = 40       -- degrees, tilt down (35 = true iso, 40 = RPG feel)
+Config.CAM_LERP             = 0.15     -- follow smoothing (0 = instant, higher = more lag)
+
 -- ─── Combat ───────────────────────────────────────────────────────────────────
 Config.AUTO_ATTACK_RANGE   = 2   -- tiles (Chebyshev distance)
 Config.AUTO_ATTACK_INTERVAL= 1.0 -- seconds between player attacks

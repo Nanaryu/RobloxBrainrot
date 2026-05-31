@@ -9,7 +9,8 @@ local RerollSystem = {}
 -- Returns the rarity name string resulting from a reroll attempt.
 -- items: array of 3 item instances, each with item.rarity = "Common" | "Rare" | ...
 function RerollSystem.Roll(items)
-	assert(#items == Config.REROLL_REQUIRES, "RerollSystem.Roll expects exactly " .. Config.REROLL_REQUIRES .. " items")
+	assert(#items == Config.REROLL_REQUIRES,
+		"RerollSystem.Roll expects exactly " .. Config.REROLL_REQUIRES .. " items")
 
 	-- Find lowest and highest rarity indices among the 3 items
 	local minIdx = math.huge
@@ -18,12 +19,8 @@ function RerollSystem.Roll(items)
 	for _, item in ipairs(items) do
 		local idx = Config.RARITY_INDEX[item.rarity]
 		assert(idx, "Unknown rarity: " .. tostring(item.rarity))
-		if idx < minIdx then
-			minIdx = idx
-		end
-		if idx > maxIdx then
-			maxIdx = idx
-		end
+		if idx < minIdx then minIdx = idx end
+		if idx > maxIdx then maxIdx = idx end
 	end
 
 	-- Ceiling = highest input rarity + 1, capped at max tier

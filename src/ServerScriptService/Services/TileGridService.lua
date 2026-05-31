@@ -31,7 +31,7 @@ function TileGridService.WorldToTile(pos: Vector3): (number, number)
 end
 
 -- Returns the Part for a given tile, or nil if out of bounds
-function TileGridService.GetTile(tx: number, tz: number): BasePart?
+function TileGridService.GetTile(tx: number, tz: number)
 	if tileMap[tx] then
 		return tileMap[tx][tz]
 	end
@@ -59,9 +59,18 @@ end
 
 -- ─── Generation ───────────────────────────────────────────────────────────────
 
-local TILE_COLOR   = Color3.fromRGB( 80, 120,  60)  -- grass-ish base
-local TILE_COLOR_B = Color3.fromRGB( 70, 110,  55)  -- checkerboard alt
-local TILE_MATERIAL = Enum.Material.SmoothPlastic
+local TILE_COLOR        = Color3.fromRGB( 80, 120,  60)  -- grass-ish base
+local TILE_COLOR_B      = Color3.fromRGB( 70, 110,  55)  -- checkerboard alt
+local TILE_COLOR_SPAWN  = Color3.fromRGB(220, 200,  80)  -- golden spawn tile
+local TILE_MATERIAL     = Enum.Material.SmoothPlastic
+
+-- Spawn tile is the centre of the grid
+local SPAWN_TX = math.floor(Config.GRID_WIDTH  / 2)
+local SPAWN_TZ = math.floor(Config.GRID_HEIGHT / 2)
+
+function TileGridService.GetSpawnTile()
+	return SPAWN_TX, SPAWN_TZ
+end
 
 function TileGridService.Generate()
 	local map = workspace:FindFirstChild("Map")
@@ -98,8 +107,12 @@ function TileGridService.Generate()
 			part.CFrame       = CFrame.new(TileGridService.TileToWorld(tx, tz))
 			part.Anchored     = true
 			part.CanCollide   = true
-			-- Subtle checkerboard to give the pixelated feel
-			part.Color        = ((tx + tz) % 2 == 0) and TILE_COLOR or TILE_COLOR_B
+			-- Spawn tile is golden; rest is checkerboard
+			if tx == SPAWN_TX and tz == SPAWN_TZ then
+				part.Color = TILE_COLOR_SPAWN
+			else
+				part.Color = ((tx + tz) % 2 == 0) and TILE_COLOR or TILE_COLOR_B
+			end
 			part.Material     = TILE_MATERIAL
 			part.CastShadow   = false   -- performance
 			part.Parent       = gridModel

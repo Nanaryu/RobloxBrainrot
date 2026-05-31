@@ -80,7 +80,7 @@ EnemyData["Gattatino Nyanino"]       = { tier=6, hp=900000,   dmg=35000,  speed=
 EnemyData["Tralalero Tralala"]       = { tier=6, hp=1200000,  dmg=45000,  speed=22, xp=200000, gold={120000,200000},lootRarity="Secret" }
 EnemyData["Espresso Signora"]        = { tier=6, hp=2000000,  dmg=65000,  speed=22, xp=330000, gold={200000,330000},lootRarity="Secret" }
 EnemyData["Trenostruzzo Turbo 3000"] = { tier=6, hp=2500000,  dmg=80000,  speed=23, xp=420000, gold={250000,420000},lootRarity="Secret" }
-EnemyData["Los Orcalitos"]           = { tier=6, hp=4000000,  dmg=120000, speed=23, xp=660000, gold={400000,660000},lootRarity="Secret" }
+EnemyData["Los Orcalitos"]           = { tier=6, hp=4000000,  dmg=120000, speed=23, xp=660000, gold={400000,660000}, lootRarity="Secret" }
 
 -- ─── Secret / OG ──────────────────────────────────────────────────────────────
 -- These are rare world bosses. Stats are intentionally extreme.
@@ -90,6 +90,6 @@ EnemyData["Dragon Cannelloni"]     = { tier=7, hp=500000000, dmg=5000000, speed=
 
 EnemyData["Skibidi Toilet"]        = { tier=8, hp=1000000000,dmg=10000000,speed=25, xp=300000000,gold={100000000,300000000},lootRarity="Secret" }
 EnemyData["Strawberry Elephant"]   = { tier=8, hp=800000000, dmg=8000000, speed=25, xp=250000000,gold={80000000,250000000}, lootRarity="Secret" }
-EnemyData["Meowl"]                 = { tier=8, hp=1200000000,dmg=12000000,speed=26, xp=400000000,gold={120000000,400000000},lootRarity="Secret" }
+EnemyData["Meowl"]                 = { tier=8, hp=1200000000,dmg=12000000,speed=26, xp=400000000,gold={120000000,400000000}, lootRarity="Secret" }
 
 return EnemyData
