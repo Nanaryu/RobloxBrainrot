@@ -34,10 +34,130 @@ local activeTween  = nil
 local spawned      = false
 local requestedTileX = nil
 local requestedTileZ = nil
+local destinationHighlight = nil
+local moveToken = 0
 
 -- ─── Per-character refs (reset on respawn) ────────────────────────────────────
 local hrp      = nil
 local humanoid = nil
+local walkTrack = nil
+
+local function worldToTile(pos)
+	local tx = math.floor(pos.X / Config.TILE_SIZE) + 1
+	local tz = math.floor(pos.Z / Config.TILE_SIZE) + 1
+	tx = math.clamp(tx, 1, Config.GRID_WIDTH)
+	tz = math.clamp(tz, 1, Config.GRID_HEIGHT)
+	return tx, tz
+end
+
+local function getTilePart(tx, tz)
+	local map = workspace:FindFirstChild("Map")
+	local tileGrid = map and map:FindFirstChild("TileGrid")
+	local tiles = tileGrid and tileGrid:FindFirstChild("Tiles")
+	return tiles and tiles:FindFirstChild(string.format("Tile_%d_%d", tx, tz))
+end
+
+local function isEnemyTileOccupied(tx, tz)
+	local map = workspace:FindFirstChild("Map")
+	local enemies = map and map:FindFirstChild("Enemies")
+	if not enemies then return false end
+
+	for _, model in ipairs(enemies:GetChildren()) do
+		if model:GetAttribute("State") ~= "dead" then
+			local currentX = model:GetAttribute("CurrentTileX")
+			local currentZ = model:GetAttribute("CurrentTileZ")
+			local movingX = model:GetAttribute("MovingToTileX")
+			local movingZ = model:GetAttribute("MovingToTileZ")
+			if (currentX == tx and currentZ == tz) or (movingX == tx and movingZ == tz) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function clearDestinationHighlight()
+	if destinationHighlight then
+		destinationHighlight:Destroy()
+		destinationHighlight = nil
+	end
+end
+
+local function setupWalkAnimation()
+	walkTrack = nil
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	local animation = Instance.new("Animation")
+	if humanoid.RigType == Enum.HumanoidRigType.R6 then
+		animation.AnimationId = "rbxassetid://180426354"
+	else
+		animation.AnimationId = "rbxassetid://507777826"
+	end
+
+	walkTrack = animator:LoadAnimation(animation)
+	walkTrack.Looped = true
+	walkTrack.Priority = Enum.AnimationPriority.Movement
+end
+
+local function playWalkAnimation()
+	if walkTrack and not walkTrack.IsPlaying then
+		walkTrack:Play(0.08)
+	end
+end
+
+local function stopWalkAnimation()
+	if walkTrack and walkTrack.IsPlaying then
+		walkTrack:Stop(0.12)
+	end
+end
+
+local function setDestinationHighlight(tx, tz)
+	clearDestinationHighlight()
+	local tile = getTilePart(tx, tz)
+	if not tile then return end
+
+	local highlight = Instance.new("Highlight")
+	highlight.Adornee = tile
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.FillColor = Color3.fromRGB(80, 210, 255)
+	highlight.FillTransparency = 0.68
+	highlight.OutlineColor = Color3.fromRGB(170, 245, 255)
+	highlight.OutlineTransparency = 0
+	highlight.Parent = tile
+	destinationHighlight = highlight
+end
+
+local function cancelActiveMove()
+	moveToken += 1
+	if activeTween then
+		activeTween:Cancel()
+		activeTween = nil
+	end
+	stopWalkAnimation()
+	isMoving = false
+	if hrp then
+		currentTileX, currentTileZ = worldToTile(hrp.Position)
+	end
+end
+
+local function fireMoveRequest(tx, tz)
+	requestedTileX = tx
+	requestedTileZ = tz
+	RequestMove:FireServer(tx, tz, currentTileX, currentTileZ)
+	task.delay(0.6, function()
+		if requestedTileX == tx and requestedTileZ == tz then
+			requestedTileX = nil
+			requestedTileZ = nil
+			clearDestinationHighlight()
+		end
+	end)
+end
 
 local function setupCharacter(character)
 	hrp      = character:WaitForChild("HumanoidRootPart")
@@ -46,12 +166,17 @@ local function setupCharacter(character)
 	humanoid.WalkSpeed     = 0
 	humanoid.JumpPower     = 0
 	humanoid.AutoRotate    = false
-	humanoid.PlatformStand = true
+	humanoid.PlatformStand = false
+	hrp.Anchored = true
+	setupWalkAnimation()
 
 	-- Reset movement state for the new life
 	isMoving  = false
 	moveQueue = {}
+	moveToken += 1
+	clearDestinationHighlight()
 	if activeTween then activeTween:Cancel() activeTween = nil end
+	stopWalkAnimation()
 	-- spawned stays false until server fires PlayerMoved for this character
 	spawned   = false
 	requestedTileX = nil
@@ -69,12 +194,10 @@ if player.Character then
 end
 
 -- ─── Step one tile ────────────────────────────────────────────────────────────
-local function stepToTile(tx, tz)
+local function tweenToTile(tx, tz, token)
 	if not hrp then return end
-	isMoving = true
 
 	local fromX, fromZ = currentTileX, currentTileZ
-	currentTileX, currentTileZ = tx, tz
 
 	local dx = tx - fromX
 	local dz = tz - fromZ
@@ -85,6 +208,8 @@ local function stepToTile(tx, tz)
 	local targetCF
 	if dx ~= 0 or dz ~= 0 then
 		-- lookAt points the model's LOOK direction (front face) toward the target.
+		local startPos = hrp.Position
+		hrp.CFrame = CFrame.lookAt(startPos, startPos + Vector3.new(dx, 0, dz))
 		targetCF = CFrame.lookAt(targetPos, targetPos + Vector3.new(dx, 0, dz))
 	else
 		targetCF = CFrame.new(targetPos)
@@ -93,14 +218,43 @@ local function stepToTile(tx, tz)
 	if activeTween then activeTween:Cancel() end
 	activeTween = TweenService:Create(hrp, MOVE_TWEEN, { CFrame = targetCF })
 	activeTween:Play()
-	activeTween.Completed:Wait()
-	activeTween = nil
-	isMoving = false
-
-	if #moveQueue > 0 then
-		local next = table.remove(moveQueue, 1)
-		stepToTile(next[1], next[2])
+	local playbackState = activeTween.Completed:Wait()
+	if token ~= moveToken or playbackState ~= Enum.PlaybackState.Completed then
+		if token == moveToken then
+			activeTween = nil
+			isMoving = false
+		end
+		return false
 	end
+
+	currentTileX, currentTileZ = tx, tz
+	activeTween = nil
+	return true
+end
+
+local function animatePath(path)
+	moveToken += 1
+	local token = moveToken
+	isMoving = true
+	playWalkAnimation()
+
+	for _, step in ipairs(path or {}) do
+		if token ~= moveToken then
+			stopWalkAnimation()
+			return
+		end
+		if not tweenToTile(step[1], step[2], token) then
+			stopWalkAnimation()
+			return
+		end
+	end
+
+	isMoving = false
+	activeTween = nil
+	requestedTileX = nil
+	requestedTileZ = nil
+	stopWalkAnimation()
+	clearDestinationHighlight()
 end
 
 -- ─── Request move ─────────────────────────────────────────────────────────────
@@ -111,28 +265,39 @@ local function requestMove(tx, tz)
 	if tx == currentTileX and tz == currentTileZ then return end
 	if requestedTileX == tx and requestedTileZ == tz then return end
 
-	moveQueue = {}
-	local px, pz = currentTileX, currentTileZ
-	while px ~= tx or pz ~= tz do
-		if px ~= tx then px = px + (tx > px and 1 or -1)
-		else              pz = pz + (tz > pz and 1 or -1) end
-		table.insert(moveQueue, { px, pz })
-	end
-
-	requestedTileX = tx
-	requestedTileZ = tz
-	RequestMove:FireServer(tx, tz)
-	task.delay(0.6, function()
-		if requestedTileX == tx and requestedTileZ == tz then
-			requestedTileX = nil
-			requestedTileZ = nil
-		end
-	end)
+	cancelActiveMove()
+	setDestinationHighlight(tx, tz)
+	fireMoveRequest(tx, tz)
 
 end
 
+local function animateOtherPlayer(otherHRP, path, tx, tz)
+	local prevX = otherHRP:GetAttribute("LastTileX")
+	local prevZ = otherHRP:GetAttribute("LastTileZ")
+	path = path or { { tx, tz } }
+
+	task.spawn(function()
+		for _, step in ipairs(path) do
+			local sx, sz = step[1], step[2]
+			local pos = tileToWorld(sx, sz)
+			local cf
+			if prevX and prevZ and (sx ~= prevX or sz ~= prevZ) then
+				cf = CFrame.lookAt(pos, pos + Vector3.new(sx - prevX, 0, sz - prevZ))
+			else
+				cf = CFrame.new(pos)
+			end
+			prevX, prevZ = sx, sz
+			otherHRP:SetAttribute("LastTileX", sx)
+			otherHRP:SetAttribute("LastTileZ", sz)
+			local tween = TweenService:Create(otherHRP, MOVE_TWEEN, { CFrame = cf })
+			tween:Play()
+			tween.Completed:Wait()
+		end
+	end)
+end
+
 -- ─── PlayerMoved: own spawn snap + other players ──────────────────────────────
-PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz)
+PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path)
 	if userId ~= player.UserId then
 		-- Other players
 		local other = Players:GetPlayerByUserId(userId)
@@ -140,18 +305,7 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz)
 		local otherHRP = other.Character:FindFirstChild("HumanoidRootPart")
 		if not otherHRP then return end
 
-		local prevX = otherHRP:GetAttribute("LastTileX")
-		local prevZ = otherHRP:GetAttribute("LastTileZ")
-		local pos   = tileToWorld(tx, tz)
-		local cf
-		if prevX and prevZ and (tx ~= prevX or tz ~= prevZ) then
-			cf = CFrame.lookAt(pos, pos + Vector3.new(tx - prevX, 0, tz - prevZ))
-		else
-			cf = CFrame.new(pos)
-		end
-		otherHRP:SetAttribute("LastTileX", tx)
-		otherHRP:SetAttribute("LastTileZ", tz)
-		TweenService:Create(otherHRP, MOVE_TWEEN, { CFrame = cf }):Play()
+		animateOtherPlayer(otherHRP, path, tx, tz)
 		return
 	end
 
@@ -161,6 +315,9 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz)
 		currentTileX, currentTileZ = tx, tz
 		requestedTileX = nil
 		requestedTileZ = nil
+		moveQueue = {}
+		moveToken += 1
+		clearDestinationHighlight()
 		if hrp then
 			hrp.CFrame = CFrame.new(tileToWorld(tx, tz))
 		end
@@ -168,12 +325,7 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz)
 	end
 
 	if requestedTileX == tx and requestedTileZ == tz then
-		requestedTileX = nil
-		requestedTileZ = nil
-		if not isMoving and #moveQueue > 0 then
-			local next = table.remove(moveQueue, 1)
-			task.spawn(stepToTile, next[1], next[2])
-		end
+		task.spawn(animatePath, path or { { tx, tz } })
 	end
 end)
 
@@ -201,7 +353,12 @@ mouse.Button1Down:Connect(function()
 	local target = mouse.Target
 	if not target then return end
 	local tx, tz = target.Name:match("^Tile_(%d+)_(%d+)$")
-	if tx and tz then requestMove(tonumber(tx), tonumber(tz)) end
+	if tx and tz then
+		tx, tz = tonumber(tx), tonumber(tz)
+		if not isEnemyTileOccupied(tx, tz) then
+			requestMove(tx, tz)
+		end
+	end
 end)
 
 -- ─── Public API ───────────────────────────────────────────────────────────────
@@ -209,4 +366,6 @@ local M = {}
 function M.GetCurrentTile() return currentTileX, currentTileZ end
 function M.IsMoving() return isMoving end
 function M.RequestMove(tx, tz) requestMove(tx, tz) end
+function M.SetDestinationHighlight(tx, tz) setDestinationHighlight(tx, tz) end
+function M.ClearDestinationHighlight() clearDestinationHighlight() end
 return M

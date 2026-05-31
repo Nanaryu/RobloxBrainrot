@@ -63,6 +63,22 @@ local function getEnemyTile(model)
 	return tx, tz
 end
 
+local function isEnemyTileOccupied(tx, tz, exceptModel)
+	local enemyFolder = workspace:FindFirstChild("Map")
+		and workspace.Map:FindFirstChild("Enemies")
+	if not enemyFolder then return false end
+
+	for _, model in ipairs(enemyFolder:GetChildren()) do
+		if model ~= exceptModel
+			and model:GetAttribute("State") ~= "dead"
+			and model:GetAttribute("CurrentTileX") == tx
+			and model:GetAttribute("CurrentTileZ") == tz then
+			return true
+		end
+	end
+	return false
+end
+
 -- Cardinal Manhattan distance
 local function manhattan(ax, az, bx, bz)
 	return math.abs(ax - bx) + math.abs(az - bz)
@@ -89,23 +105,27 @@ function stopAttacking()
 	targetModel   = nil
 	targetId      = nil
 	setHighlight(nil)
+	MovementController.ClearDestinationHighlight()
 	StopAttack:FireServer()
 end
 
 -- ─── Find the best cardinal neighbour tile for approaching enemy ──────────────
 -- Returns the cardinal tile adjacent to enemy that is closest to player.
-local function bestApproachTile(etx, etz, ptx, ptz)
+local function bestApproachTile(enemyModel, etx, etz, ptx, ptz)
 	local cardinals = { {etx+1,etz}, {etx-1,etz}, {etx,etz+1}, {etx,etz-1} }
 	local bestTx, bestTz, bestDist = ptx, ptz, math.huge
 	for _, t in ipairs(cardinals) do
 		local tx, tz = t[1], t[2]
 		local inBounds = tx >= 1 and tz >= 1 and tx <= Config.GRID_WIDTH and tz <= Config.GRID_HEIGHT
 		local d = manhattan(ptx, ptz, tx, tz)
-		if inBounds and d < bestDist then
+		if inBounds and not isEnemyTileOccupied(tx, tz, enemyModel) and d < bestDist then
 			bestDist = d
 			bestTx   = tx
 			bestTz   = tz
 		end
+	end
+	if bestDist == math.huge then
+		return nil, nil
 	end
 	return bestTx, bestTz
 end
@@ -148,8 +168,13 @@ local function startAttackLoop(model, id)
 
 			else
 				-- Walk to best cardinal tile next to enemy
-				local atx, atz = bestApproachTile(etx, etz, ptx, ptz)
-				MovementController.RequestMove(atx, atz)
+				local atx, atz = bestApproachTile(targetModel, etx, etz, ptx, ptz)
+				if atx and atz then
+					MovementController.SetDestinationHighlight(atx, atz)
+					MovementController.RequestMove(atx, atz)
+				else
+					MovementController.ClearDestinationHighlight()
+				end
 				task.wait(Config.MOVE_TWEEN_TIME + 0.05)
 			end
 		end

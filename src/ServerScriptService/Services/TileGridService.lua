@@ -38,9 +38,33 @@ function TileGridService.GetTile(tx: number, tz: number)
 	return nil
 end
 
--- Returns true if the tile exists (is walkable)
+-- Returns true if the tile exists and has not been marked blocked terrain.
 function TileGridService.IsWalkable(tx: number, tz: number): boolean
-	return TileGridService.GetTile(tx, tz) ~= nil
+	local tile = TileGridService.GetTile(tx, tz)
+	if not tile then return false end
+	return tile:GetAttribute("Walkable") ~= false
+end
+
+function TileGridService.SetTileWalkable(tx: number, tz: number, walkable: boolean)
+	local tile = TileGridService.GetTile(tx, tz)
+	if not tile then return false end
+	tile:SetAttribute("Walkable", walkable)
+	return true
+end
+
+function TileGridService.SetTileType(tx: number, tz: number, tileType: string)
+	local tile = TileGridService.GetTile(tx, tz)
+	if not tile then return false end
+
+	tile:SetAttribute("TileType", tileType)
+	tile:SetAttribute("Walkable", tileType ~= "Water")
+
+	if tileType == "Water" then
+		tile.Color = Color3.fromRGB(45, 105, 165)
+		tile.Material = Enum.Material.SmoothPlastic
+	end
+
+	return true
 end
 
 -- ─── Neighbour Lookup (for pathfinding) ───────────────────────────────────────
@@ -107,6 +131,8 @@ function TileGridService.Generate()
 			part.CFrame       = CFrame.new(TileGridService.TileToWorld(tx, tz))
 			part.Anchored     = true
 			part.CanCollide   = true
+			part:SetAttribute("TileType", "Grass")
+			part:SetAttribute("Walkable", true)
 			-- Spawn tile is golden; rest is checkerboard
 			if tx == SPAWN_TX and tz == SPAWN_TZ then
 				part.Color = TILE_COLOR_SPAWN

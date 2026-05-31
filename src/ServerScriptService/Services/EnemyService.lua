@@ -99,14 +99,55 @@ local function tileToWorld(tx, tz): Vector3
 	return TileGrid.TileToWorld(tx, tz)
 end
 
+local function prepareModelParts(model: Model)
+	for _, inst in ipairs(model:GetDescendants()) do
+		if inst:IsA("BasePart") then
+			inst.Anchored = true
+			inst.CanCollide = false
+			inst.CanQuery = true
+		end
+	end
+end
+
+local function groundModelOnTile(model: Model, tx: number, tz: number)
+	local baseCF = CFrame.new(tileToWorld(tx, tz))
+	model:PivotTo(baseCF)
+
+	local boundsCF, boundsSize = model:GetBoundingBox()
+	local bottomY = boundsCF.Position.Y - boundsSize.Y * 0.5
+	local tileTopY = Config.TILE_HEIGHT
+	local groundedCF = baseCF + Vector3.new(0, tileTopY - bottomY, 0)
+	model:PivotTo(groundedCF)
+	model:SetAttribute("PivotYOffset", model:GetPivot().Position.Y - tileToWorld(tx, tz).Y)
+end
+
+local function getTilePivotPosition(model: Model, tx: number, tz: number): Vector3
+	return tileToWorld(tx, tz) + Vector3.new(0, model:GetAttribute("PivotYOffset") or 0, 0)
+end
+
+local function tweenModelPivot(model: Model, targetCF: CFrame, tweenInfo: TweenInfo)
+	local pivotValue = Instance.new("CFrameValue")
+	pivotValue.Value = model:GetPivot()
+	local connection = pivotValue.Changed:Connect(function(value)
+		if model.Parent then
+			model:PivotTo(value)
+		end
+	end)
+
+	local tween = TweenService:Create(pivotValue, tweenInfo, { Value = targetCF })
+	tween:Play()
+	tween.Completed:Wait()
+	connection:Disconnect()
+	pivotValue:Destroy()
+end
+
 local function manhattan(ax, az, bx, bz): number
 	return math.abs(ax - bx) + math.abs(az - bz)
 end
 
 -- ─── Movement helper for enemies ─────────────────────────────────────────────
 local function moveEnemyToTile(model, tx, tz)
-	local hrp = model.PrimaryPart
-	if not hrp then return end
+	if not model.PrimaryPart then return end
 
 	local id    = model:GetAttribute("EnemyId")
 	local fromX = model:GetAttribute("CurrentTileX")
@@ -117,23 +158,28 @@ local function moveEnemyToTile(model, tx, tz)
 	-- Don't move onto a tile already claimed by another enemy
 	if isTileOccupiedByOther(tx, tz, id) or isPlayerTileOccupied(tx, tz) then return end
 
+	model:SetAttribute("MovingToTileX", tx)
+	model:SetAttribute("MovingToTileZ", tz)
 	releaseTile(fromX, fromZ, id)
-	model:SetAttribute("CurrentTileX", tx)
-	model:SetAttribute("CurrentTileZ", tz)
 	occupyTile(tx, tz, id)
 
-	local targetPos = tileToWorld(tx, tz)
+	local targetPos = getTilePivotPosition(model, tx, tz)
 
 	-- Face direction of travel + slide in one tween
 	local targetCF
 	if dx ~= 0 or dz ~= 0 then
+		local pivotPos = model:GetPivot().Position
+		model:PivotTo(CFrame.lookAt(pivotPos, pivotPos + Vector3.new(dx, 0, dz)))
 		targetCF = CFrame.lookAt(targetPos, targetPos + Vector3.new(dx, 0, dz))
 	else
 		targetCF = CFrame.new(targetPos)
 	end
-	TweenService:Create(hrp, MOVE_TWEEN, { CFrame = targetCF }):Play()
+	tweenModelPivot(model, targetCF, MOVE_TWEEN)
 
-	task.wait(Config.MOVE_TWEEN_TIME)
+	model:SetAttribute("CurrentTileX", tx)
+	model:SetAttribute("CurrentTileZ", tz)
+	model:SetAttribute("MovingToTileX", nil)
+	model:SetAttribute("MovingToTileZ", nil)
 end
 
 -- ─── Overhead BillboardGui (HP bar + name + rarity) ──────────────────────────
@@ -266,10 +312,8 @@ function EnemyService.Spawn(spawnDef: {
 
 		local rootPart = model.PrimaryPart
 		if rootPart then
-			-- Anchor so we can tween CFrame directly; weld carries rest of rig.
-			rootPart.Anchored = true
-			rootPart.CanCollide = false
-			rootPart.CFrame = CFrame.new(tileToWorld(spawnDef.tx, spawnDef.tz))
+			prepareModelParts(model)
+			groundModelOnTile(model, spawnDef.tx, spawnDef.tz)
 		else
 			warn("[EnemyService] '" .. spawnDef.name .. "' has no PrimaryPart — set it to RootPart in Studio.")
 		end
@@ -285,9 +329,10 @@ function EnemyService.Spawn(spawnDef: {
 		cube.CanCollide = false
 		cube.Color      = RARITY_COLORS[data.lootRarity] or Color3.new(0.8, 0.8, 0.8)
 		cube.Material   = Enum.Material.SmoothPlastic
-		cube.CFrame     = CFrame.new(tileToWorld(spawnDef.tx, spawnDef.tz))
 		cube.Parent     = model
 		model.PrimaryPart = cube
+		prepareModelParts(model)
+		groundModelOnTile(model, spawnDef.tx, spawnDef.tz)
 	end
 
 	-- Attributes
@@ -378,7 +423,7 @@ function EnemyService._AILoop(id: string)
 
 	local WANDER_PAUSE_MIN = 2.0   -- seconds to idle between wander steps
 	local WANDER_PAUSE_MAX = 4.0
-	local CHASE_TICK       = 0.5   -- seconds between path recalculations while chasing
+	local CHASE_TICK       = 0.05  -- seconds between path recalculations while chasing
 	local ATTACK_CHECK     = 0.3   -- seconds between attack opportunity checks
 
 	while true do
@@ -499,11 +544,11 @@ function EnemyService._AILoop(id: string)
 			end
 
 			-- Face the player
-			local hrp = m.PrimaryPart
-			if hrp then
+			if m.PrimaryPart then
 				local playerWorldPos = tileToWorld(ptx2, ptz2)
-				local facedCF = CFrame.new(hrp.Position, Vector3.new(playerWorldPos.X, hrp.Position.Y, playerWorldPos.Z))
-				TweenService:Create(hrp, TURN_TWEEN, { CFrame = facedCF }):Play()
+				local pivotPos = m:GetPivot().Position
+				local facedCF = CFrame.new(pivotPos, Vector3.new(playerWorldPos.X, pivotPos.Y, playerWorldPos.Z))
+				task.spawn(tweenModelPivot, m, facedCF, TURN_TWEEN)
 			end
 
 			-- Deal damage
@@ -584,6 +629,17 @@ end
 
 function EnemyService.IsTileOccupied(tx: number, tz: number)
 	return isTileOccupied(tx, tz)
+end
+
+function EnemyService.IsCurrentTileOccupied(tx: number, tz: number)
+	for _, model in pairs(enemies) do
+		if model:GetAttribute("State") ~= "dead"
+			and model:GetAttribute("CurrentTileX") == tx
+			and model:GetAttribute("CurrentTileZ") == tz then
+			return true
+		end
+	end
+	return false
 end
 
 -- ─── Init ─────────────────────────────────────────────────────────────────────

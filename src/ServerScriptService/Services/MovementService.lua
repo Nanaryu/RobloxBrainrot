@@ -3,18 +3,20 @@
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Config      = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
-local TileGrid    = require(script.Parent.TileGridService)
-local Remotes     = ReplicatedStorage:WaitForChild("Remotes")
+local Config     = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local Pathfinder = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Pathfinder"))
+local TileGrid   = require(script.Parent.TileGridService)
+local Remotes    = ReplicatedStorage:WaitForChild("Remotes")
 
 local RequestMove = Remotes:WaitForChild("RequestMove")
 local PlayerMoved = Remotes:WaitForChild("PlayerMoved")
 
 local playerTiles = {}   -- [userId] = { tx, tz }
+local playerMoveSeq = {}
 local EnemyService
 
 -- ─── Validation ───────────────────────────────────────────────────────────────
-local MAX_JUMP = 24
+local MAX_PATH_NODES = Config.GRID_WIDTH * Config.GRID_HEIGHT
 
 local function isPlayerTileOccupied(tx, tz, exceptPlayer)
 	for userId, tile in pairs(playerTiles) do
@@ -27,33 +29,59 @@ local function isPlayerTileOccupied(tx, tz, exceptPlayer)
 	return false
 end
 
-local function isValid(player, tx, tz)
+local function isValidTile(tx, tz)
 	if type(tx) ~= "number" or type(tz) ~= "number" then return false end
 	tx, tz = math.floor(tx), math.floor(tz)
 	if tx < 1 or tz < 1 or tx > Config.GRID_WIDTH or tz > Config.GRID_HEIGHT then return false end
 	if not TileGrid.IsWalkable(tx, tz) then return false end
-	if isPlayerTileOccupied(tx, tz, player) then return false end
-	if not EnemyService then EnemyService = require(script.Parent.EnemyService) end
-	if EnemyService.IsTileOccupied(tx, tz) then return false end
-	local cur = playerTiles[player.UserId]
-	if cur then
-		if math.abs(tx - cur.tx) + math.abs(tz - cur.tz) > MAX_JUMP then return false end
-	end
 	return true
 end
 
--- ─── Move handler ─────────────────────────────────────────────────────────────
-RequestMove.OnServerEvent:Connect(function(player, tx, tz)
-	tx, tz = math.floor(tx or 0), math.floor(tz or 0)
-	if not isValid(player, tx, tz) then return end
+local function findPlayerPath(player, fromX, fromZ, tx, tz)
+	if not isValidTile(fromX, fromZ) or not isValidTile(tx, tz) then return nil end
+	if isPlayerTileOccupied(tx, tz, player) then return nil end
+	if not EnemyService then EnemyService = require(script.Parent.EnemyService) end
+	if EnemyService.IsTileOccupied and EnemyService.IsTileOccupied(tx, tz) then return nil end
 
-	playerTiles[player.UserId] = { tx = tx, tz = tz }
+	local function isPassable(px, pz)
+		if not TileGrid.IsWalkable(px, pz) then return false end
+		if isPlayerTileOccupied(px, pz, player) then return false end
+		if EnemyService.IsCurrentTileOccupied and EnemyService.IsCurrentTileOccupied(px, pz) then return false end
+		return true
+	end
+
+	if not isPassable(tx, tz) then return nil end
+	return Pathfinder.FindPath(isPassable, fromX, fromZ, tx, tz, MAX_PATH_NODES)
+end
+
+-- ─── Move handler ─────────────────────────────────────────────────────────────
+RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ)
+	tx, tz = math.floor(tx or 0), math.floor(tz or 0)
+	local cur = playerTiles[player.UserId]
+	if not cur then return end
+
+	playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
+	local seq = playerMoveSeq[player.UserId]
+
+	fromX = math.floor(fromX or cur.tx)
+	fromZ = math.floor(fromZ or cur.tz)
+
+	local path = findPlayerPath(player, fromX, fromZ, tx, tz)
+	if not path then return end
 
 	-- DO NOT touch hrp.CFrame here — the client owns visual position.
 	-- Only broadcast so other clients can lerp.
 	-- We fire to ALL clients (including sender) so their "other player" lerp works.
 	-- The sender ignores its own userId in the PlayerMoved handler for normal moves.
-	PlayerMoved:FireAllClients(player.UserId, tx, tz)
+	PlayerMoved:FireAllClients(player.UserId, tx, tz, path)
+
+	for stepIndex, step in ipairs(path) do
+		task.delay(stepIndex * Config.MOVE_TWEEN_TIME, function()
+			if playerMoveSeq[player.UserId] == seq then
+				playerTiles[player.UserId] = { tx = step[1], tz = step[2] }
+			end
+		end)
+	end
 end)
 
 -- ─── Spawn ────────────────────────────────────────────────────────────────────
@@ -66,10 +94,19 @@ Players.PlayerAdded:Connect(function(player)
 		-- Use the official spawn tile defined in TileGridService
 		local spawnTx, spawnTz = TileGrid.GetSpawnTile()
 		playerTiles[player.UserId] = { tx = spawnTx, tz = spawnTz }
+		playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
 
 		-- Hard-place the server-side HRP so hitboxes are correct from frame 1
 		local hrp = character:WaitForChild("HumanoidRootPart", 10)
+		local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 10)
+		if humanoid then
+			humanoid.WalkSpeed = 0
+			humanoid.JumpPower = 0
+			humanoid.AutoRotate = false
+			humanoid.PlatformStand = false
+		end
 		if hrp then
+			hrp.Anchored = true
 			local wp = TileGrid.TileToWorld(spawnTx, spawnTz)
 			-- +3 Y so character stands on top of tile, matching client tileToWorld
 			hrp.CFrame = CFrame.new(wp.X, wp.Y + 3, wp.Z)
@@ -84,6 +121,7 @@ end)
 
 Players.PlayerRemoving:Connect(function(player)
 	playerTiles[player.UserId] = nil
+	playerMoveSeq[player.UserId] = nil
 end)
 
 -- ─── Public API ───────────────────────────────────────────────────────────────
