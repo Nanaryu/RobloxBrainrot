@@ -11,15 +11,30 @@ local RequestMove = Remotes:WaitForChild("RequestMove")
 local PlayerMoved = Remotes:WaitForChild("PlayerMoved")
 
 local playerTiles = {}   -- [userId] = { tx, tz }
+local EnemyService
 
 -- ─── Validation ───────────────────────────────────────────────────────────────
 local MAX_JUMP = 24
+
+local function isPlayerTileOccupied(tx, tz, exceptPlayer)
+	for userId, tile in pairs(playerTiles) do
+		if tile.tx == tx and tile.tz == tz then
+			if not exceptPlayer or userId ~= exceptPlayer.UserId then
+				return true
+			end
+		end
+	end
+	return false
+end
 
 local function isValid(player, tx, tz)
 	if type(tx) ~= "number" or type(tz) ~= "number" then return false end
 	tx, tz = math.floor(tx), math.floor(tz)
 	if tx < 1 or tz < 1 or tx > Config.GRID_WIDTH or tz > Config.GRID_HEIGHT then return false end
 	if not TileGrid.IsWalkable(tx, tz) then return false end
+	if isPlayerTileOccupied(tx, tz, player) then return false end
+	if not EnemyService then EnemyService = require(script.Parent.EnemyService) end
+	if EnemyService.IsTileOccupied(tx, tz) then return false end
 	local cur = playerTiles[player.UserId]
 	if cur then
 		if math.abs(tx - cur.tx) + math.abs(tz - cur.tz) > MAX_JUMP then return false end
@@ -78,6 +93,10 @@ function MovementService.GetPlayerTile(player)
 	local t = playerTiles[player.UserId]
 	if t then return t.tx, t.tz end
 	return nil, nil
+end
+
+function MovementService.IsPlayerTileOccupied(tx, tz, exceptPlayer)
+	return isPlayerTileOccupied(tx, tz, exceptPlayer)
 end
 
 print("[MovementService] Ready.")

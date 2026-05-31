@@ -61,9 +61,19 @@ end
 local function isTileOccupied(tx, tz)
 	return occupiedTiles[tx .. "_" .. tz] ~= nil
 end
+local function isTileOccupiedByOther(tx, tz, id)
+	local occupant = occupiedTiles[tx .. "_" .. tz]
+	return occupant ~= nil and occupant ~= id
+end
+local function isPlayerTileOccupied(tx, tz)
+	if not MovementService then
+		MovementService = require(script.Parent.MovementService)
+	end
+	return MovementService.IsPlayerTileOccupied(tx, tz)
+end
 -- Walkable AND unoccupied by another enemy
 local function isPassable(tx, tz)
-	return TileGrid.IsWalkable(tx, tz) and not isTileOccupied(tx, tz)
+	return TileGrid.IsWalkable(tx, tz) and not isTileOccupied(tx, tz) and not isPlayerTileOccupied(tx, tz)
 end
 
 -- ─── Tween config (mirrors player move speed) ─────────────────────────────────
@@ -89,8 +99,8 @@ local function tileToWorld(tx, tz): Vector3
 	return TileGrid.TileToWorld(tx, tz)
 end
 
-local function chebyshev(ax, az, bx, bz): number
-	return math.max(math.abs(ax - bx), math.abs(az - bz))
+local function manhattan(ax, az, bx, bz): number
+	return math.abs(ax - bx) + math.abs(az - bz)
 end
 
 -- ─── Movement helper for enemies ─────────────────────────────────────────────
@@ -105,7 +115,7 @@ local function moveEnemyToTile(model, tx, tz)
 	local dz    = tz - fromZ
 
 	-- Don't move onto a tile already claimed by another enemy
-	if isTileOccupied(tx, tz) then return end
+	if isTileOccupiedByOther(tx, tz, id) or isPlayerTileOccupied(tx, tz) then return end
 
 	releaseTile(fromX, fromZ, id)
 	model:SetAttribute("CurrentTileX", tx)
@@ -237,6 +247,10 @@ function EnemyService.Spawn(spawnDef: {
 	local dmg   = math.floor(data.dmg * dmgMult)
 
 	local id = newId()
+	if isTileOccupied(spawnDef.tx, spawnDef.tz) or isPlayerTileOccupied(spawnDef.tx, spawnDef.tz) then
+		warn("[EnemyService] Spawn tile is occupied: " .. tostring(spawnDef.tx) .. "," .. tostring(spawnDef.tz))
+		return nil
+	end
 
 	-- ── Clone real model from ServerStorage > EnemyModels > [enemy name] ────────
 	-- Each model must have PrimaryPart = RootPart.
@@ -320,9 +334,11 @@ local function getClosestPlayerTile(fromX: number, fromZ: number)
 	local bestTx, bestTz = fromX, fromZ
 
 	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		local tx, tz = MovementService.GetPlayerTile(player)
-		if tx then
-			local d = chebyshev(fromX, fromZ, tx, tz)
+		if tx and humanoid and humanoid.Health > 0 then
+			local d = manhattan(fromX, fromZ, tx, tz)
 			if d < bestDist then
 				bestDist   = d
 				bestPlayer = player
@@ -347,7 +363,7 @@ local function pickWanderTarget(model: Model): (number, number)
 		local dz = math.random(-range, range)
 		local tx = math.clamp(sx + dx, 1, Config.GRID_WIDTH)
 		local tz = math.clamp(sz + dz, 1, Config.GRID_HEIGHT)
-		if isWalkable(tx, tz) then
+		if isPassable(tx, tz) then
 			return tx, tz
 		end
 	end
@@ -391,7 +407,7 @@ function EnemyService._AILoop(id: string)
 
 			-- Pick a wander destination and walk there one step at a time
 			local wx, wz = pickWanderTarget(model)
-			local path   = Pathfinder.FindPath(isWalkable, cx, cz, wx, wz, 200)
+			local path   = Pathfinder.FindPath(isPassable, cx, cz, wx, wz, 200)
 
 			if path and #path > 0 then
 				-- Walk the path step by step, re-checking aggro each tile
@@ -427,30 +443,36 @@ function EnemyService._AILoop(id: string)
 				continue
 			end
 
-			local attackRange = Config.AUTO_ATTACK_RANGE
-
 			-- Already adjacent? Switch to attack state
-			if dist <= attackRange then
+			if dist == 1 then
 				m:SetAttribute("State", "attack")
 				task.wait(0)
 				continue
 			end
 
-			-- A* toward player, stop one tile away
 			local cx2 = m:GetAttribute("CurrentTileX")
 			local cz2 = m:GetAttribute("CurrentTileZ")
 
-			-- Pathfind to a tile adjacent to player instead of the player's tile
-			-- (so we don't try to walk onto occupied tile)
-			local path = Pathfinder.FindPath(isWalkable, cx2, cz2, ptx, ptz, 300)
-
-			if path and #path > 0 then
-				-- Walk one step, then re-evaluate
-				local step = path[1]
-				-- Don't step onto player's exact tile
-				if step[1] ~= ptx or step[2] ~= ptz then
-					moveEnemyToTile(m, step[1], step[2])
+			local goals = { {ptx + 1, ptz}, {ptx - 1, ptz}, {ptx, ptz + 1}, {ptx, ptz - 1} }
+			local bestPath = nil
+			for _, goal in ipairs(goals) do
+				local gx, gz = goal[1], goal[2]
+				if gx == cx2 and gz == cz2 then
+					bestPath = {}
+					break
 				end
+				if isPassable(gx, gz) then
+					local candidate = Pathfinder.FindPath(isPassable, cx2, cz2, gx, gz, 300)
+					if candidate and (not bestPath or #candidate < #bestPath) then
+						bestPath = candidate
+					end
+				end
+			end
+
+			if bestPath and #bestPath > 0 then
+				-- Walk one step, then re-evaluate
+				local step = bestPath[1]
+				moveEnemyToTile(m, step[1], step[2])
 			end
 
 			task.wait(CHASE_TICK)
@@ -470,7 +492,7 @@ function EnemyService._AILoop(id: string)
 			local _, ptx2, ptz2, dist2 = getClosestPlayerTile(cx2, cz2)
 
 			-- Player moved out of attack range → chase
-			if dist2 > Config.AUTO_ATTACK_RANGE then
+			if dist2 ~= 1 then
 				m:SetAttribute("State", "chase")
 				task.wait(0)
 				continue
@@ -499,6 +521,7 @@ function EnemyService._DamagePlayer(player: Player, amount: number, sourceId: st
 	if not char then return end
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 	if not humanoid then return end
+	if humanoid.Health <= 0 then return end
 	humanoid:TakeDamage(amount)
 	TakeDamage:FireClient(player, player.UserId, amount)
 end
@@ -557,6 +580,10 @@ end
 -- ─── Public: get model by id ──────────────────────────────────────────────────
 function EnemyService.GetEnemy(id: string)
 	return enemies[id]
+end
+
+function EnemyService.IsTileOccupied(tx: number, tz: number)
+	return isTileOccupied(tx, tz)
 end
 
 -- ─── Init ─────────────────────────────────────────────────────────────────────

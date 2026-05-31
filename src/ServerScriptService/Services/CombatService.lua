@@ -121,6 +121,25 @@ Players.PlayerRemoving:Connect(function(player: Player)
 	playerLastAttack[player.UserId] = nil
 end)
 
+local function setupPlayer(player: Player)
+	player.CharacterAdded:Connect(function(character)
+		playerTargets[player.UserId] = nil
+		playerLoops[player.UserId] = false
+		local humanoid = character:WaitForChild("Humanoid", 10)
+		if humanoid then
+			humanoid.Died:Connect(function()
+				playerTargets[player.UserId] = nil
+				playerLoops[player.UserId] = false
+			end)
+		end
+	end)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
 -- ─── Add missing remotes (CombatService-specific ones not in RemotesInit) ─────
 -- These are added here so they're always present when this script loads.
 -- RemotesInit runs first but we double-check gracefully.

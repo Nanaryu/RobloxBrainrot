@@ -19,7 +19,7 @@ Config.CAM_VERTICAL_ANGLE   = 40       -- degrees, tilt down (35 = true iso, 40 
 Config.CAM_LERP             = 0.15     -- follow smoothing (0 = instant, higher = more lag)
 
 -- ─── Combat ───────────────────────────────────────────────────────────────────
-Config.AUTO_ATTACK_RANGE   = 2   -- tiles (Chebyshev distance)
+Config.AUTO_ATTACK_RANGE   = 1   -- cardinal-adjacent tile only
 Config.AUTO_ATTACK_INTERVAL= 1.0 -- seconds between player attacks
 Config.ENEMY_ATTACK_INTERVAL= 1.5
 

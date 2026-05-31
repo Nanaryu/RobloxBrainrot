@@ -1,4 +1,4 @@
--- StarterPlayer/StarterPlayerScripts/CombatController.lua
+-- StarterPlayer/StarterPlayerScripts/CombatController.client.lua
 -- Click enemy → walk to cardinal-adjacent tile → auto-attack.
 -- Re-initialises character refs on respawn.
 
@@ -11,7 +11,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config     = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 local Remotes    = ReplicatedStorage:WaitForChild("Remotes")
 
-local RequestMove   = Remotes:WaitForChild("RequestMove")
 local RequestAttack = Remotes:WaitForChild("RequestAttack")
 local AttackResult  = Remotes:WaitForChild("AttackResult")
 local StopAttack    = Remotes:WaitForChild("StopAttack")
@@ -24,8 +23,21 @@ local MovementController = require(script.Parent:WaitForChild("MovementControlle
 local player = Players.LocalPlayer
 local hrp    = nil  -- updated on respawn
 
+local stopAttacking
+
 local function setupCharacter(character)
 	hrp = character:WaitForChild("HumanoidRootPart")
+	if stopAttacking then
+		stopAttacking()
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 10)
+	if humanoid then
+		humanoid.Died:Connect(function()
+			if stopAttacking then
+				stopAttacking()
+			end
+		end)
+	end
 end
 player.CharacterAdded:Connect(setupCharacter)
 if player.Character then setupCharacter(player.Character) end
@@ -34,7 +46,7 @@ if player.Character then setupCharacter(player.Character) end
 local targetModel     = nil
 local targetId        = nil
 local attackActive    = false
-local selectionBox    = nil
+local targetHighlight = nil
 
 -- ─── Helpers ──────────────────────────────────────────────────────────────────
 local function tileToWorld(tx, tz)
@@ -58,20 +70,21 @@ end
 
 -- ─── Selection highlight ──────────────────────────────────────────────────────
 local function setHighlight(model)
-	if selectionBox then selectionBox:Destroy() selectionBox = nil end
+	if targetHighlight then targetHighlight:Destroy() targetHighlight = nil end
 	if not model then return end
-	local box = Instance.new("SelectionBox")
-	box.Adornee            = model
-	box.Color3             = Color3.fromRGB(255, 220, 0)
-	box.LineThickness      = 0.05
-	box.SurfaceColor3      = Color3.fromRGB(255, 255, 0)
-	box.SurfaceTransparency = 0.8
-	box.Parent             = workspace
-	selectionBox = box
+	local highlight = Instance.new("Highlight")
+	highlight.Adornee = model
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.FillColor = Color3.fromRGB(255, 220, 60)
+	highlight.FillTransparency = 0.78
+	highlight.OutlineColor = Color3.fromRGB(255, 245, 140)
+	highlight.OutlineTransparency = 0
+	highlight.Parent = model
+	targetHighlight = highlight
 end
 
 -- ─── Stop attacking ───────────────────────────────────────────────────────────
-local function stopAttacking()
+function stopAttacking()
 	attackActive  = false
 	targetModel   = nil
 	targetId      = nil
@@ -85,11 +98,13 @@ local function bestApproachTile(etx, etz, ptx, ptz)
 	local cardinals = { {etx+1,etz}, {etx-1,etz}, {etx,etz+1}, {etx,etz-1} }
 	local bestTx, bestTz, bestDist = ptx, ptz, math.huge
 	for _, t in ipairs(cardinals) do
-		local d = manhattan(ptx, ptz, t[1], t[2])
-		if d < bestDist then
+		local tx, tz = t[1], t[2]
+		local inBounds = tx >= 1 and tz >= 1 and tx <= Config.GRID_WIDTH and tz <= Config.GRID_HEIGHT
+		local d = manhattan(ptx, ptz, tx, tz)
+		if inBounds and d < bestDist then
 			bestDist = d
-			bestTx   = t[1]
-			bestTz   = t[2]
+			bestTx   = tx
+			bestTz   = tz
 		end
 	end
 	return bestTx, bestTz
@@ -134,7 +149,7 @@ local function startAttackLoop(model, id)
 			else
 				-- Walk to best cardinal tile next to enemy
 				local atx, atz = bestApproachTile(etx, etz, ptx, ptz)
-				RequestMove:FireServer(atx, atz)
+				MovementController.RequestMove(atx, atz)
 				task.wait(Config.MOVE_TWEEN_TIME + 0.05)
 			end
 		end

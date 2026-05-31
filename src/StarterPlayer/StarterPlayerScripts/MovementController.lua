@@ -32,6 +32,8 @@ local isMoving     = false
 local moveQueue    = {}
 local activeTween  = nil
 local spawned      = false
+local requestedTileX = nil
+local requestedTileZ = nil
 
 -- ─── Per-character refs (reset on respawn) ────────────────────────────────────
 local hrp      = nil
@@ -52,6 +54,8 @@ local function setupCharacter(character)
 	if activeTween then activeTween:Cancel() activeTween = nil end
 	-- spawned stays false until server fires PlayerMoved for this character
 	spawned   = false
+	requestedTileX = nil
+	requestedTileZ = nil
 end
 
 -- Initialise for current character, then reconnect on every future respawn
@@ -105,6 +109,7 @@ local function requestMove(tx, tz)
 	tx = math.clamp(math.floor(tx), 1, Config.GRID_WIDTH)
 	tz = math.clamp(math.floor(tz), 1, Config.GRID_HEIGHT)
 	if tx == currentTileX and tz == currentTileZ then return end
+	if requestedTileX == tx and requestedTileZ == tz then return end
 
 	moveQueue = {}
 	local px, pz = currentTileX, currentTileZ
@@ -114,12 +119,16 @@ local function requestMove(tx, tz)
 		table.insert(moveQueue, { px, pz })
 	end
 
+	requestedTileX = tx
+	requestedTileZ = tz
 	RequestMove:FireServer(tx, tz)
+	task.delay(0.6, function()
+		if requestedTileX == tx and requestedTileZ == tz then
+			requestedTileX = nil
+			requestedTileZ = nil
+		end
+	end)
 
-	if not isMoving and #moveQueue > 0 then
-		local next = table.remove(moveQueue, 1)
-		task.spawn(stepToTile, next[1], next[2])
-	end
 end
 
 -- ─── PlayerMoved: own spawn snap + other players ──────────────────────────────
@@ -150,8 +159,20 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz)
 	if not spawned then
 		spawned = true
 		currentTileX, currentTileZ = tx, tz
+		requestedTileX = nil
+		requestedTileZ = nil
 		if hrp then
 			hrp.CFrame = CFrame.new(tileToWorld(tx, tz))
+		end
+		return
+	end
+
+	if requestedTileX == tx and requestedTileZ == tz then
+		requestedTileX = nil
+		requestedTileZ = nil
+		if not isMoving and #moveQueue > 0 then
+			local next = table.remove(moveQueue, 1)
+			task.spawn(stepToTile, next[1], next[2])
 		end
 	end
 end)
@@ -187,4 +208,5 @@ end)
 local M = {}
 function M.GetCurrentTile() return currentTileX, currentTileZ end
 function M.IsMoving() return isMoving end
+function M.RequestMove(tx, tz) requestMove(tx, tz) end
 return M

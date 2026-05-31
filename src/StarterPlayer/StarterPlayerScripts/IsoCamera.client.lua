@@ -1,4 +1,4 @@
--- StarterPlayer/StarterPlayerScripts/IsoCamera.lua
+-- StarterPlayer/StarterPlayerScripts/IsoCamera.client.lua
 -- Static isometric camera. Re-acquires character on respawn.
 
 local Players           = game:GetService("Players")
