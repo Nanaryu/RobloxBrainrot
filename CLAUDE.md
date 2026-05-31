@@ -93,13 +93,15 @@ StarterGui/
 ## ⚙️ Key Config Values (Config.lua)
 | Key | Value | Notes |
 |-----|-------|-------|
-| TILE_SIZE | 4 studs | width & depth per tile |
+| TILE_SIZE | 8 studs | width & depth per tile |
 | TILE_HEIGHT | 0.5 studs | visual thickness |
 | GRID_WIDTH / HEIGHT | 64 × 64 | tiles total |
 | MOVE_TWEEN_TIME | 0.18s | player & enemy slide speed |
-| AUTO_ATTACK_RANGE | 2 tiles | Chebyshev distance |
+| AUTO_ATTACK_RANGE | 1 tile | Cardinal-adjacent only (Manhattan distance == 1) |
 | AUTO_ATTACK_INTERVAL | 1.0s | player attack speed |
 | ENEMY_ATTACK_INTERVAL | 1.5s | enemy attack speed |
+| SOUND_HIT_ID | "" | Placeholder SoundId for player hit confirmation |
+| SOUND_DAMAGE_ID | "" | Placeholder SoundId for player taking damage |
 | ELITE_SPAWN_CHANCE | 5% | chance per spawn |
 | ELITE_STAR_MAX | 5 | max star count |
 | PREMIUM_NAME | "Crystals" | TBD final name |
@@ -113,12 +115,16 @@ StarterGui/
 - Checkerboard coloring for pixelated feel
 - `TileToWorld(tx, tz)` and `WorldToTile(pos)` helpers
 - `IsWalkable(tx, tz)` and `GetNeighbours(tx, tz)` for pathfinding
+- Tiles can be made unwalkable by setting `Walkable=false`, or by calling `SetTileType(tx, tz, "Water")`
 
 ### ✅ Player Movement (MovementController client + MovementService server)
 - WASD + click-to-move on tile parts (named `Tile_X_Z`)
-- Client-side: builds Manhattan path, tweens HRP tile by tile
+- Client-side: tweens server-approved path tile by tile; destination highlight persists until arrival
 - Character **faces direction of travel** — tween to `CFrame.lookAt(pos, pos + dir)`
 - Server validates moves, broadcasts `PlayerMoved`; other clients lerp + face using tile delta
+- Server pathing blocks non-walkable terrain, other players, and enemy current/moving destination tiles
+- Retargeting uses request IDs so stale server approvals are ignored; local player movement is a single Heartbeat constant-speed mover instead of stacked tweens
+- Movement is blocked locally and server-side while the player's Humanoid is dead
 - `MovementController.GetCurrentTile()` and `IsMoving()` exposed for other scripts
 - `MovementService.GetPlayerTile(player)` exposed for EnemyService
 - Respawn-safe: re-acquires character refs on `CharacterAdded`
@@ -131,6 +137,7 @@ StarterGui/
 ### ✅ A* Pathfinding (Pathfinder.lua)
 - Pure module, takes `isWalkable(tx,tz)` function — no service deps
 - Manhattan heuristic, 4-directional (no diagonal)
+- Tie-breaks equal-cost routes with goal-aware neighbour ordering, so diagonal-looking routes alternate X/Z steps instead of exhausting one axis first
 - `maxNodes` cap (default 400) prevents freezes
 - Returns array of `{tx, tz}` steps from start→goal (start excluded)
 
@@ -142,6 +149,7 @@ StarterGui/
   - `chase` — re-paths toward nearest player every 0.5s, one step at a time
   - `attack` — faces player, damages every `ENEMY_ATTACK_INTERVAL`
 - Occupied-tile set prevents enemies stacking on each other
+- `CurrentTileX/Z` and `MovingToTileX/Z` are both treated as player-blocking obstacles during pathing
 - **Elite system**: 5% spawn chance, 1–5 stars, HP/DMG multiplied per Config tables
 - **Overhead BillboardGui**: rarity-colored name (★ prefix for elites) + green→yellow→red HP bar
 - `EnemyService.DamageEnemy(id, amount, player)` — public API for CombatService
@@ -155,6 +163,7 @@ StarterGui/
 - **Client**: receives `EnemyHPUpdate` and refreshes billboard HP bar directly
 - **Server**: validates Manhattan distance == 1 on every `RequestAttack`, flat 10 dmg (placeholder)
 - **Server**: per-player attack loop with `AUTO_ATTACK_INTERVAL` throttle
+- **Client + Server**: dead players cannot begin or continue attacks; death clears active combat state
 
 ### ✅ Leaderboard (Leaderboard.server.lua)
 - Adds `leaderstats` folder with `Coins` IntValue (starts at 0) to every player on join
@@ -164,8 +173,8 @@ StarterGui/
 ## 📡 Remote Events & Functions (all in ReplicatedStorage.Remotes)
 | Name | Direction | Args |
 |------|-----------|------|
-| RequestMove | C→S | tx, tz |
-| PlayerMoved | S→C (all) | userId, tx, tz |
+| RequestMove | C→S | tx, tz, fromX, fromZ, requestId |
+| PlayerMoved | S→C (all) | userId, tx, tz, path, requestId |
 | RequestAttack | C→S | enemyId |
 | AttackResult | S→C | hit, damage, enemyId, remainingHP |
 | StopAttack | C→S | — |
@@ -235,8 +244,9 @@ Reroll: combine 3 items → weighted roll between lowest input rarity and (highe
 - [ ] Zone/area system (replace hardcoded test spawns)
 - [ ] NPC shop (premium currency)
 - [ ] Offline player shops
-- [ ] Sound effects
-- [ ] Death/respawn handling
+- [x] Sound effect hooks (placeholder IDs for hit and damage)
+- [x] Death input lockout for movement and combat
+- [ ] Full death/respawn flow polish
 - [ ] Game name
 
 ---
@@ -250,3 +260,21 @@ Reroll: combine 3 items → weighted roll between lowest input rarity and (highe
 - [ ] Respawn mechanic (timer? cost? safe zone?)
 - [ ] Premium currency final name (currently "Crystals")
 - [ ] Offline shop slot limit and duration tiers (set in Config, needs UX decision)
+
+---
+
+## Latest Movement/Combat Context
+- Destination highlights now stay until the accepted path finishes; invalid/unanswered move requests clear if the server does not accept them quickly.
+- Mid-route retargeting ignores stale path approvals with `requestId`; accepted routes interrupt from the current visual position through one Heartbeat movement loop, avoiding stacked tween speedups.
+- Player pathing is server-authoritative and blocks `Walkable=false` terrain, water tiles, other players, and enemy current/moving destination tiles.
+- Dead players are blocked from local movement/targeting and server-side movement/attack remotes.
+- Tiles are currently 8 studs wide/deep for easier clicking and smoother perceived movement.
+- `TileGridService.SetTileType(tx, tz, "Water")` marks a tile as unwalkable and recolors it; `SetTileWalkable(tx, tz, false)` is the direct toggle.
+- A* remains 4-directional but now tie-breaks equal-cost paths so diagonal-looking routes alternate X/Z steps instead of walking all of one axis first.
+- Enemy targeting chooses the closest reachable cardinal neighbour tile by actual A* path length before auto-attacking.
+- Hit and damage sound hooks are wired through `Config.SOUND_HIT_ID` and `Config.SOUND_DAMAGE_ID`; both are intentionally blank placeholders until final assets are chosen.
+
+## Recommended Next Tweaks
+- Add a tiny path preview or hover marker for blocked/water tiles so players learn why clicks are ignored.
+- Add server rejection feedback for invalid moves if responsiveness still feels ambiguous under latency.
+- Consider reserving player destination tiles server-side during movement to prevent two players choosing the same final tile at the same time.

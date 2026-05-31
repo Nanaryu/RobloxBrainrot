@@ -23,9 +23,17 @@ local playerTargets:    { [number]: string  } = {}  -- userId → enemyId
 local playerLastAttack: { [number]: number  } = {}  -- userId → tick()
 
 local CombatService = {}
+local playerLoops: { [number]: boolean } = {}
+
+local function isPlayerAlive(player: Player): boolean
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	return humanoid ~= nil and humanoid.Health > 0
+end
 
 -- ─── Validate that player is in attack range of enemy ─────────────────────────
 local function inRange(player: Player, enemyId: string): boolean
+	if not isPlayerAlive(player) then return false end
 	if not MovementService then MovementService = require(script.Parent.MovementService) end
 	if not EnemyService    then EnemyService    = require(script.Parent.EnemyService)    end
 
@@ -47,6 +55,11 @@ end
 -- ─── Attack tick (called by the per-player loop) ──────────────────────────────
 local function doAttack(player: Player)
 	if not EnemyService then EnemyService = require(script.Parent.EnemyService) end
+	if not isPlayerAlive(player) then
+		playerTargets[player.UserId] = nil
+		playerLoops[player.UserId] = false
+		return
+	end
 
 	local userId  = player.UserId
 	local enemyId = playerTargets[userId]
@@ -69,8 +82,6 @@ local function doAttack(player: Player)
 end
 
 -- ─── Per-player attack loop ───────────────────────────────────────────────────
-local playerLoops: { [number]: boolean } = {}
-
 local function startAttackLoop(player: Player)
 	local userId = player.UserId
 	if playerLoops[userId] then return end
@@ -103,6 +114,7 @@ end
 -- ─── Remote: player sets a target ─────────────────────────────────────────────
 RequestAttack.OnServerEvent:Connect(function(player: Player, enemyId: string)
 	if type(enemyId) ~= "string" then return end
+	if not isPlayerAlive(player) then return end
 
 	playerTargets[player.UserId] = enemyId
 	startAttackLoop(player)

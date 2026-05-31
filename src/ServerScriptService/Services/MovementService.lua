@@ -29,6 +29,12 @@ local function isPlayerTileOccupied(tx, tz, exceptPlayer)
 	return false
 end
 
+local function isPlayerAlive(player)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	return humanoid ~= nil and humanoid.Health > 0
+end
+
 local function isValidTile(tx, tz)
 	if type(tx) ~= "number" or type(tz) ~= "number" then return false end
 	tx, tz = math.floor(tx), math.floor(tz)
@@ -41,12 +47,12 @@ local function findPlayerPath(player, fromX, fromZ, tx, tz)
 	if not isValidTile(fromX, fromZ) or not isValidTile(tx, tz) then return nil end
 	if isPlayerTileOccupied(tx, tz, player) then return nil end
 	if not EnemyService then EnemyService = require(script.Parent.EnemyService) end
-	if EnemyService.IsTileOccupied and EnemyService.IsTileOccupied(tx, tz) then return nil end
+	if EnemyService.IsTileBlockedForPlayers and EnemyService.IsTileBlockedForPlayers(tx, tz) then return nil end
 
 	local function isPassable(px, pz)
 		if not TileGrid.IsWalkable(px, pz) then return false end
 		if isPlayerTileOccupied(px, pz, player) then return false end
-		if EnemyService.IsCurrentTileOccupied and EnemyService.IsCurrentTileOccupied(px, pz) then return false end
+		if EnemyService.IsTileBlockedForPlayers and EnemyService.IsTileBlockedForPlayers(px, pz) then return false end
 		return true
 	end
 
@@ -55,7 +61,9 @@ local function findPlayerPath(player, fromX, fromZ, tx, tz)
 end
 
 -- ─── Move handler ─────────────────────────────────────────────────────────────
-RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ)
+RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ, requestId)
+	if not isPlayerAlive(player) then return end
+
 	tx, tz = math.floor(tx or 0), math.floor(tz or 0)
 	local cur = playerTiles[player.UserId]
 	if not cur then return end
@@ -71,9 +79,8 @@ RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ)
 
 	-- DO NOT touch hrp.CFrame here — the client owns visual position.
 	-- Only broadcast so other clients can lerp.
-	-- We fire to ALL clients (including sender) so their "other player" lerp works.
-	-- The sender ignores its own userId in the PlayerMoved handler for normal moves.
-	PlayerMoved:FireAllClients(player.UserId, tx, tz, path)
+	-- We fire to ALL clients, including sender; sender uses requestId to ignore stale approvals.
+	PlayerMoved:FireAllClients(player.UserId, tx, tz, path, requestId)
 
 	for stepIndex, step in ipairs(path) do
 		task.delay(stepIndex * Config.MOVE_TWEEN_TIME, function()
@@ -104,6 +111,9 @@ Players.PlayerAdded:Connect(function(player)
 			humanoid.JumpPower = 0
 			humanoid.AutoRotate = false
 			humanoid.PlatformStand = false
+			humanoid.Died:Connect(function()
+				playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
+			end)
 		end
 		if hrp then
 			hrp.Anchored = true

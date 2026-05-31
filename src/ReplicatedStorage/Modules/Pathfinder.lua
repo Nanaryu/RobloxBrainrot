@@ -15,7 +15,36 @@ local function heuristic(ax, az, bx, bz)
 	return math.abs(ax - bx) + math.abs(az - bz)
 end
 
-local NEIGHBOURS = { {1,0}, {-1,0}, {0,1}, {0,-1} }
+local BASE_NEIGHBOURS = { {1,0}, {-1,0}, {0,1}, {0,-1} }
+
+local function orderedNeighbours(cx, cz, goalX, goalZ)
+	local neighbours = {}
+	local remainingX = math.abs(goalX - cx)
+	local remainingZ = math.abs(goalZ - cz)
+
+	for _, off in ipairs(BASE_NEIGHBOURS) do
+		local nx, nz = cx + off[1], cz + off[2]
+		local axisNeed = (off[1] ~= 0) and remainingX or remainingZ
+		local balanceNeed = (off[1] ~= 0) and remainingZ or remainingX
+		table.insert(neighbours, {
+			dx = off[1],
+			dz = off[2],
+			h = heuristic(nx, nz, goalX, goalZ),
+			axisNeed = axisNeed,
+			balanceNeed = balanceNeed,
+		})
+	end
+
+	table.sort(neighbours, function(a, b)
+		if a.h ~= b.h then return a.h < b.h end
+		if a.axisNeed ~= b.axisNeed then return a.axisNeed > b.axisNeed end
+		if a.balanceNeed ~= b.balanceNeed then return a.balanceNeed < b.balanceNeed end
+		if a.dz ~= b.dz then return a.dz < b.dz end
+		return a.dx < b.dx
+	end)
+
+	return neighbours
+end
 
 function Pathfinder.FindPath(
 	isWalkable: (number, number) -> boolean,
@@ -41,7 +70,8 @@ function Pathfinder.FindPath(
 
 	table.insert(openSet, {
 		x = startX, z = startZ,
-		f = heuristic(startX, startZ, goalX, goalZ)
+		f = heuristic(startX, startZ, goalX, goalZ),
+		h = heuristic(startX, startZ, goalX, goalZ),
 	})
 	inOpen[startKey] = true
 
@@ -51,7 +81,10 @@ function Pathfinder.FindPath(
 		-- Pop node with lowest f  (linear scan — fine for tile RPG distances ≤ ~64)
 		local bestIdx = 1
 		for i = 2, #openSet do
-			if openSet[i].f < openSet[bestIdx].f then bestIdx = i end
+			if openSet[i].f < openSet[bestIdx].f
+				or (openSet[i].f == openSet[bestIdx].f and openSet[i].h < openSet[bestIdx].h) then
+				bestIdx = i
+			end
 		end
 		local current = table.remove(openSet, bestIdx)
 		local cx, cz  = current.x, current.z
@@ -90,8 +123,8 @@ function Pathfinder.FindPath(
 			return nil
 		end
 
-		for _, off in ipairs(NEIGHBOURS) do
-			local nx, nz = cx + off[1], cz + off[2]
+		for _, off in ipairs(orderedNeighbours(cx, cz, goalX, goalZ)) do
+			local nx, nz = cx + off.dx, cz + off.dz
 			if isWalkable(nx, nz) then
 				local nk      = key(nx, nz)
 				local tentG   = (gScore[ck] or math.huge) + 1
@@ -99,9 +132,11 @@ function Pathfinder.FindPath(
 					cameFrom[nk] = { px = cx, pz = cz, nx = nx, nz = nz }
 					gScore[nk]   = tentG
 					if not inOpen[nk] then
+						local h = heuristic(nx, nz, goalX, goalZ)
 						table.insert(openSet, {
 							x = nx, z = nz,
-							f = tentG + heuristic(nx, nz, goalX, goalZ)
+							f = tentG + h,
+							h = h,
 						})
 						inOpen[nk] = true
 					end

@@ -9,6 +9,7 @@ local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config     = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+local Pathfinder = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Pathfinder"))
 local Remotes    = ReplicatedStorage:WaitForChild("Remotes")
 
 local RequestAttack = Remotes:WaitForChild("RequestAttack")
@@ -22,15 +23,20 @@ local MovementController = require(script.Parent:WaitForChild("MovementControlle
 
 local player = Players.LocalPlayer
 local hrp    = nil  -- updated on respawn
+local humanoid = nil
 
 local stopAttacking
+
+local function isAlive()
+	return humanoid ~= nil and humanoid.Health > 0
+end
 
 local function setupCharacter(character)
 	hrp = character:WaitForChild("HumanoidRootPart")
 	if stopAttacking then
 		stopAttacking()
 	end
-	local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 10)
+	humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 10)
 	if humanoid then
 		humanoid.Died:Connect(function()
 			if stopAttacking then
@@ -63,20 +69,54 @@ local function getEnemyTile(model)
 	return tx, tz
 end
 
+local function getTilePart(tx, tz)
+	local map = workspace:FindFirstChild("Map")
+	local tileGrid = map and map:FindFirstChild("TileGrid")
+	local tiles = tileGrid and tileGrid:FindFirstChild("Tiles")
+	return tiles and tiles:FindFirstChild(string.format("Tile_%d_%d", tx, tz))
+end
+
+local function isTileWalkable(tx, tz)
+	local tile = getTilePart(tx, tz)
+	return tile ~= nil and tile:GetAttribute("Walkable") ~= false
+end
+
 local function isEnemyTileOccupied(tx, tz, exceptModel)
 	local enemyFolder = workspace:FindFirstChild("Map")
 		and workspace.Map:FindFirstChild("Enemies")
 	if not enemyFolder then return false end
 
 	for _, model in ipairs(enemyFolder:GetChildren()) do
+		local currentX = model:GetAttribute("CurrentTileX")
+		local currentZ = model:GetAttribute("CurrentTileZ")
+		local movingX = model:GetAttribute("MovingToTileX")
+		local movingZ = model:GetAttribute("MovingToTileZ")
 		if model ~= exceptModel
 			and model:GetAttribute("State") ~= "dead"
-			and model:GetAttribute("CurrentTileX") == tx
-			and model:GetAttribute("CurrentTileZ") == tz then
+			and ((currentX == tx and currentZ == tz) or (movingX == tx and movingZ == tz)) then
 			return true
 		end
 	end
 	return false
+end
+
+local function playSound(soundId, parent)
+	if type(soundId) ~= "string" or soundId == "" then return end
+
+	local sound = Instance.new("Sound")
+	sound.SoundId = soundId
+	sound.Volume = 0.6
+	sound.RollOffMaxDistance = 70
+	sound.Parent = parent or workspace
+	sound:Play()
+	sound.Ended:Connect(function()
+		sound:Destroy()
+	end)
+	task.delay(3, function()
+		if sound.Parent then
+			sound:Destroy()
+		end
+	end)
 end
 
 -- Cardinal Manhattan distance
@@ -113,18 +153,28 @@ end
 -- Returns the cardinal tile adjacent to enemy that is closest to player.
 local function bestApproachTile(enemyModel, etx, etz, ptx, ptz)
 	local cardinals = { {etx+1,etz}, {etx-1,etz}, {etx,etz+1}, {etx,etz-1} }
-	local bestTx, bestTz, bestDist = ptx, ptz, math.huge
+	local bestTx, bestTz, bestPathLen, bestDist = nil, nil, math.huge, math.huge
+	local function isPassable(tx, tz)
+		if tx == ptx and tz == ptz then return true end
+		return isTileWalkable(tx, tz) and not isEnemyTileOccupied(tx, tz, enemyModel)
+	end
+
 	for _, t in ipairs(cardinals) do
 		local tx, tz = t[1], t[2]
 		local inBounds = tx >= 1 and tz >= 1 and tx <= Config.GRID_WIDTH and tz <= Config.GRID_HEIGHT
 		local d = manhattan(ptx, ptz, tx, tz)
-		if inBounds and not isEnemyTileOccupied(tx, tz, enemyModel) and d < bestDist then
-			bestDist = d
-			bestTx   = tx
-			bestTz   = tz
+		if inBounds and isPassable(tx, tz) then
+			local path = Pathfinder.FindPath(isPassable, ptx, ptz, tx, tz, Config.GRID_WIDTH * Config.GRID_HEIGHT)
+			local pathLen = path and #path or math.huge
+			if pathLen < bestPathLen or (pathLen == bestPathLen and d < bestDist) then
+				bestPathLen = pathLen
+				bestDist = d
+				bestTx = tx
+				bestTz = tz
+			end
 		end
 	end
-	if bestDist == math.huge then
+	if bestPathLen == math.huge then
 		return nil, nil
 	end
 	return bestTx, bestTz
@@ -132,8 +182,10 @@ end
 
 -- ─── Attack loop ──────────────────────────────────────────────────────────────
 local function startAttackLoop(model, id)
+	if not isAlive() then return end
 	attackActive = false
 	task.wait(0)
+	if not isAlive() then return end
 
 	targetModel  = model
 	targetId     = id
@@ -141,7 +193,7 @@ local function startAttackLoop(model, id)
 	setHighlight(model)
 
 	task.spawn(function()
-		while attackActive and targetModel and targetModel.Parent do
+		while attackActive and targetModel and targetModel.Parent and isAlive() do
 			if targetModel:GetAttribute("State") == "dead" then
 				stopAttacking() break
 			end
@@ -154,7 +206,7 @@ local function startAttackLoop(model, id)
 
 			if dist == 1 then
 				-- Adjacent: face enemy, fire attack
-				if hrp then
+				if hrp and isAlive() then
 					local enemyPos = tileToWorld(etx, etz)
 					local myPos    = tileToWorld(ptx, ptz)
 					local facedCF  = CFrame.lookAt(myPos, Vector3.new(enemyPos.X, myPos.Y, enemyPos.Z))
@@ -212,10 +264,17 @@ EnemyHPUpdate.OnClientEvent:Connect(function(enemyId, currentHP, maxHP)
 	end
 end)
 
+AttackResult.OnClientEvent:Connect(function(hit)
+	if hit then
+		playSound(Config.SOUND_HIT_ID, hrp)
+	end
+end)
+
 -- ─── Mouse click detection ────────────────────────────────────────────────────
 local mouse = player:GetMouse()
 
 mouse.Button1Down:Connect(function()
+	if not isAlive() then return end
 	local hit = mouse.Target
 	if not hit then return end
 
@@ -238,7 +297,7 @@ end)
 -- ─── Escape cancels ───────────────────────────────────────────────────────────
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.Escape then stopAttacking() end
+	if input.KeyCode == Enum.KeyCode.Escape and isAlive() then stopAttacking() end
 end)
 
 -- ─── Enemy died ───────────────────────────────────────────────────────────────
@@ -249,6 +308,7 @@ end)
 -- ─── Player took damage flash ─────────────────────────────────────────────────
 TakeDamage.OnClientEvent:Connect(function(targetUserId, amount)
 	if targetUserId ~= player.UserId then return end
+	playSound(Config.SOUND_DAMAGE_ID, hrp)
 	local gui = player.PlayerGui:FindFirstChild("DamageFlash")
 	if not gui then
 		gui = Instance.new("ScreenGui")
@@ -273,6 +333,10 @@ end)
 
 -- ─── Cursor hover ─────────────────────────────────────────────────────────────
 RunService.RenderStepped:Connect(function()
+	if not isAlive() then
+		mouse.Icon = ""
+		return
+	end
 	local hit = mouse.Target
 	local m = hit
 	while m and not m:GetAttribute("EnemyId") do m = m and m.Parent end

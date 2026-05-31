@@ -4,6 +4,7 @@
 local Players           = game:GetService("Players")
 local UserInputService  = game:GetService("UserInputService")
 local TweenService      = game:GetService("TweenService")
+local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config  = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
@@ -15,6 +16,7 @@ local PlayerMoved = Remotes:WaitForChild("PlayerMoved")
 local player = Players.LocalPlayer
 
 local MOVE_TWEEN = TweenInfo.new(Config.MOVE_TWEEN_TIME, Enum.EasingStyle.Linear)
+local MOVE_SPEED = Config.TILE_SIZE / Config.MOVE_TWEEN_TIME
 
 -- ─── Tile helpers (pure, no character refs) ───────────────────────────────────
 local function tileToWorld(tx, tz)
@@ -36,11 +38,17 @@ local requestedTileX = nil
 local requestedTileZ = nil
 local destinationHighlight = nil
 local moveToken = 0
+local moveRequestId = 0
+local acceptedMoveRequestId = 0
 
 -- ─── Per-character refs (reset on respawn) ────────────────────────────────────
 local hrp      = nil
 local humanoid = nil
 local walkTrack = nil
+
+local function isAlive()
+	return humanoid ~= nil and humanoid.Health > 0
+end
 
 local function worldToTile(pos)
 	local tx = math.floor(pos.X / Config.TILE_SIZE) + 1
@@ -74,6 +82,11 @@ local function isEnemyTileOccupied(tx, tz)
 		end
 	end
 	return false
+end
+
+local function isTileWalkable(tx, tz)
+	local tile = getTilePart(tx, tz)
+	return tile ~= nil and tile:GetAttribute("Walkable") ~= false
 end
 
 local function clearDestinationHighlight()
@@ -133,13 +146,15 @@ local function setDestinationHighlight(tx, tz)
 	destinationHighlight = highlight
 end
 
-local function cancelActiveMove()
+local function cancelActiveMove(keepAnimation)
 	moveToken += 1
 	if activeTween then
 		activeTween:Cancel()
 		activeTween = nil
 	end
-	stopWalkAnimation()
+	if not keepAnimation then
+		stopWalkAnimation()
+	end
 	isMoving = false
 	if hrp then
 		currentTileX, currentTileZ = worldToTile(hrp.Position)
@@ -147,11 +162,13 @@ local function cancelActiveMove()
 end
 
 local function fireMoveRequest(tx, tz)
+	moveRequestId += 1
+	local requestId = moveRequestId
 	requestedTileX = tx
 	requestedTileZ = tz
-	RequestMove:FireServer(tx, tz, currentTileX, currentTileZ)
+	RequestMove:FireServer(tx, tz, currentTileX, currentTileZ, requestId)
 	task.delay(0.6, function()
-		if requestedTileX == tx and requestedTileZ == tz then
+		if requestedTileX == tx and requestedTileZ == tz and acceptedMoveRequestId < requestId then
 			requestedTileX = nil
 			requestedTileZ = nil
 			clearDestinationHighlight()
@@ -169,6 +186,13 @@ local function setupCharacter(character)
 	humanoid.PlatformStand = false
 	hrp.Anchored = true
 	setupWalkAnimation()
+	humanoid.Died:Connect(function()
+		spawned = false
+		cancelActiveMove(false)
+		clearDestinationHighlight()
+		requestedTileX = nil
+		requestedTileZ = nil
+	end)
 
 	-- Reset movement state for the new life
 	isMoving  = false
@@ -195,40 +219,44 @@ end
 
 -- ─── Step one tile ────────────────────────────────────────────────────────────
 local function tweenToTile(tx, tz, token)
-	if not hrp then return end
+	if not hrp or not isAlive() then return end
 
 	local fromX, fromZ = currentTileX, currentTileZ
-
 	local dx = tx - fromX
 	local dz = tz - fromZ
 	local targetPos = tileToWorld(tx, tz)
+	local facing = Vector3.new(dx, 0, dz)
 
-	-- CFrame.lookAt(eye, target) is unambiguous: +Z of model faces target.
-	-- We want the model to face the direction of travel, so lookAt = pos + dir.
-	local targetCF
-	if dx ~= 0 or dz ~= 0 then
-		-- lookAt points the model's LOOK direction (front face) toward the target.
-		local startPos = hrp.Position
-		hrp.CFrame = CFrame.lookAt(startPos, startPos + Vector3.new(dx, 0, dz))
-		targetCF = CFrame.lookAt(targetPos, targetPos + Vector3.new(dx, 0, dz))
-	else
-		targetCF = CFrame.new(targetPos)
+	if facing.Magnitude <= 0 then
+		facing = Vector3.new(targetPos.X - hrp.Position.X, 0, targetPos.Z - hrp.Position.Z)
 	end
 
-	if activeTween then activeTween:Cancel() end
-	activeTween = TweenService:Create(hrp, MOVE_TWEEN, { CFrame = targetCF })
-	activeTween:Play()
-	local playbackState = activeTween.Completed:Wait()
-	if token ~= moveToken or playbackState ~= Enum.PlaybackState.Completed then
-		if token == moveToken then
-			activeTween = nil
-			isMoving = false
+	while token == moveToken and isAlive() and hrp do
+		local currentPos = hrp.Position
+		local delta = Vector3.new(targetPos.X - currentPos.X, 0, targetPos.Z - currentPos.Z)
+		local distance = delta.Magnitude
+		if distance <= 0.03 then
+			break
 		end
+
+		local dt = RunService.Heartbeat:Wait()
+		local step = math.min(distance, MOVE_SPEED * dt)
+		local direction = delta.Unit
+		local nextPos = currentPos + direction * step
+		facing = direction
+		hrp.CFrame = CFrame.lookAt(nextPos, nextPos + facing)
+	end
+
+	if token ~= moveToken or not isAlive() then
 		return false
 	end
 
+	if facing.Magnitude > 0 then
+		hrp.CFrame = CFrame.lookAt(targetPos, targetPos + facing)
+	else
+		hrp.CFrame = CFrame.new(targetPos)
+	end
 	currentTileX, currentTileZ = tx, tz
-	activeTween = nil
 	return true
 end
 
@@ -238,34 +266,42 @@ local function animatePath(path)
 	isMoving = true
 	playWalkAnimation()
 
+	local finalStep = path and path[#path]
+	local finalX = finalStep and finalStep[1]
+	local finalZ = finalStep and finalStep[2]
+
 	for _, step in ipairs(path or {}) do
 		if token ~= moveToken then
-			stopWalkAnimation()
 			return
 		end
 		if not tweenToTile(step[1], step[2], token) then
-			stopWalkAnimation()
+			if token == moveToken then
+				stopWalkAnimation()
+			end
 			return
 		end
 	end
 
 	isMoving = false
 	activeTween = nil
-	requestedTileX = nil
-	requestedTileZ = nil
+	if requestedTileX == finalX and requestedTileZ == finalZ then
+		requestedTileX = nil
+		requestedTileZ = nil
+		clearDestinationHighlight()
+	end
 	stopWalkAnimation()
-	clearDestinationHighlight()
 end
 
 -- ─── Request move ─────────────────────────────────────────────────────────────
 local function requestMove(tx, tz)
-	if not spawned or not hrp then return end
+	if not spawned or not hrp or not isAlive() then return end
 	tx = math.clamp(math.floor(tx), 1, Config.GRID_WIDTH)
 	tz = math.clamp(math.floor(tz), 1, Config.GRID_HEIGHT)
 	if tx == currentTileX and tz == currentTileZ then return end
 	if requestedTileX == tx and requestedTileZ == tz then return end
+	if not isTileWalkable(tx, tz) or isEnemyTileOccupied(tx, tz) then return end
 
-	cancelActiveMove()
+	playWalkAnimation()
 	setDestinationHighlight(tx, tz)
 	fireMoveRequest(tx, tz)
 
@@ -297,7 +333,7 @@ local function animateOtherPlayer(otherHRP, path, tx, tz)
 end
 
 -- ─── PlayerMoved: own spawn snap + other players ──────────────────────────────
-PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path)
+PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
 	if userId ~= player.UserId then
 		-- Other players
 		local other = Players:GetPlayerByUserId(userId)
@@ -308,6 +344,7 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path)
 		animateOtherPlayer(otherHRP, path, tx, tz)
 		return
 	end
+	if not isAlive() then return end
 
 	-- Own spawn: server placed us, snap into position
 	if not spawned then
@@ -324,7 +361,8 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path)
 		return
 	end
 
-	if requestedTileX == tx and requestedTileZ == tz then
+	if requestedTileX == tx and requestedTileZ == tz and requestId == moveRequestId then
+		acceptedMoveRequestId = requestId
 		task.spawn(animatePath, path or { { tx, tz } })
 	end
 end)
@@ -355,7 +393,7 @@ mouse.Button1Down:Connect(function()
 	local tx, tz = target.Name:match("^Tile_(%d+)_(%d+)$")
 	if tx and tz then
 		tx, tz = tonumber(tx), tonumber(tz)
-		if not isEnemyTileOccupied(tx, tz) then
+		if isTileWalkable(tx, tz) and not isEnemyTileOccupied(tx, tz) then
 			requestMove(tx, tz)
 		end
 	end

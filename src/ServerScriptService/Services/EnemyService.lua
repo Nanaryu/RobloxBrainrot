@@ -61,6 +61,16 @@ end
 local function isTileOccupied(tx, tz)
 	return occupiedTiles[tx .. "_" .. tz] ~= nil
 end
+local function isModelBlockingTile(model: Model, tx: number, tz: number): boolean
+	if model:GetAttribute("State") == "dead" then return false end
+
+	local currentX = model:GetAttribute("CurrentTileX")
+	local currentZ = model:GetAttribute("CurrentTileZ")
+	local movingX = model:GetAttribute("MovingToTileX")
+	local movingZ = model:GetAttribute("MovingToTileZ")
+
+	return (currentX == tx and currentZ == tz) or (movingX == tx and movingZ == tz)
+end
 local function isTileOccupiedByOther(tx, tz, id)
 	local occupant = occupiedTiles[tx .. "_" .. tz]
 	return occupant ~= nil and occupant ~= id
@@ -605,7 +615,12 @@ function EnemyService._Kill(id: string, killer: Player?)
 
 	local dtx = model:GetAttribute("CurrentTileX")
 	local dtz = model:GetAttribute("CurrentTileZ")
+	local movingX = model:GetAttribute("MovingToTileX")
+	local movingZ = model:GetAttribute("MovingToTileZ")
 	releaseTile(dtx, dtz, id)
+	if movingX and movingZ then
+		releaseTile(movingX, movingZ, id)
+	end
 
 	local worldPos = tileToWorld(dtx, dtz)
 
@@ -633,9 +648,20 @@ end
 
 function EnemyService.IsCurrentTileOccupied(tx: number, tz: number)
 	for _, model in pairs(enemies) do
-		if model:GetAttribute("State") ~= "dead"
+		if isModelBlockingTile(model, tx, tz)
 			and model:GetAttribute("CurrentTileX") == tx
 			and model:GetAttribute("CurrentTileZ") == tz then
+			return true
+		end
+	end
+	return false
+end
+
+function EnemyService.IsTileBlockedForPlayers(tx: number, tz: number)
+	if isTileOccupied(tx, tz) then return true end
+
+	for _, model in pairs(enemies) do
+		if isModelBlockingTile(model, tx, tz) then
 			return true
 		end
 	end

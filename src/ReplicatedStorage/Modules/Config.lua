@@ -4,7 +4,7 @@
 local Config = {}
 
 -- ─── Tile Grid ────────────────────────────────────────────────────────────────
-Config.TILE_SIZE       = 4       -- studs per tile (width & depth)
+Config.TILE_SIZE       = 8       -- studs per tile (width & depth)
 Config.TILE_HEIGHT     = 0.5     -- visual thickness of each tile part
 Config.GRID_WIDTH      = 64      -- number of tiles horizontally
 Config.GRID_HEIGHT     = 64      -- number of tiles vertically
@@ -22,6 +22,8 @@ Config.CAM_LERP             = 0.15     -- follow smoothing (0 = instant, higher 
 Config.AUTO_ATTACK_RANGE   = 1   -- cardinal-adjacent tile only
 Config.AUTO_ATTACK_INTERVAL= 1.0 -- seconds between player attacks
 Config.ENEMY_ATTACK_INTERVAL= 1.5
+Config.SOUND_HIT_ID        = ""  -- placeholder: set to rbxassetid://... for player hit SFX
+Config.SOUND_DAMAGE_ID     = ""  -- placeholder: set to rbxassetid://... for player takes damage SFX
 
 -- ─── Item Rarities ────────────────────────────────────────────────────────────
 -- Order = weakest → strongest. Used for reroll math and display colour.
