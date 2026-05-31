@@ -37,6 +37,7 @@
     "Workspace": {
       "$className": "Workspace",
       "Map": {
+        "$className": "Folder",
         "$path": "src/Workspace/Map"
       }
     }
