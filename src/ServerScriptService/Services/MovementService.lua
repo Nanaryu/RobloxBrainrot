@@ -11,11 +11,10 @@ local Remotes    = ReplicatedStorage:WaitForChild("Remotes")
 local RequestMove = Remotes:WaitForChild("RequestMove")
 local PlayerMoved = Remotes:WaitForChild("PlayerMoved")
 
-local playerTiles = {}   -- [userId] = { tx, tz }
+local playerTiles   = {}   -- [userId] = { tx, tz }  — tracks current server tile
 local playerMoveSeq = {}
 local EnemyService
 
--- ─── Validation ───────────────────────────────────────────────────────────────
 local MAX_PATH_NODES = Config.GRID_WIDTH * Config.GRID_HEIGHT
 
 local function isPlayerTileOccupied(tx, tz, exceptPlayer)
@@ -31,7 +30,7 @@ end
 
 local function isPlayerAlive(player)
 	local character = player.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local humanoid  = character and character:FindFirstChildOfClass("Humanoid")
 	return humanoid ~= nil and humanoid.Health > 0
 end
 
@@ -39,8 +38,7 @@ local function isValidTile(tx, tz)
 	if type(tx) ~= "number" or type(tz) ~= "number" then return false end
 	tx, tz = math.floor(tx), math.floor(tz)
 	if tx < 1 or tz < 1 or tx > Config.GRID_WIDTH or tz > Config.GRID_HEIGHT then return false end
-	if not TileGrid.IsWalkable(tx, tz) then return false end
-	return true
+	return TileGrid.IsWalkable(tx, tz)
 end
 
 local function findPlayerPath(player, fromX, fromZ, tx, tz)
@@ -71,19 +69,30 @@ RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ, request
 	playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
 	local seq = playerMoveSeq[player.UserId]
 
+	-- Trust the client's reported origin if it's close to our tracked tile.
+	-- This prevents rubber-banding when the client is mid-step.
 	fromX = math.floor(fromX or cur.tx)
 	fromZ = math.floor(fromZ or cur.tz)
+	-- Clamp: don't let the client teleport the origin far away.
+	local originDrift = math.abs(fromX - cur.tx) + math.abs(fromZ - cur.tz)
+	if originDrift > 3 then
+		fromX = cur.tx
+		fromZ = cur.tz
+	end
 
 	local path = findPlayerPath(player, fromX, fromZ, tx, tz)
-	if not path then return end
+	if not path or #path == 0 then return end
 
-	-- DO NOT touch hrp.CFrame here — the client owns visual position.
-	-- Only broadcast so other clients can lerp.
-	-- We fire to ALL clients, including sender; sender uses requestId to ignore stale approvals.
+	-- Broadcast the approved path to all clients.
 	PlayerMoved:FireAllClients(player.UserId, tx, tz, path, requestId)
 
-	for stepIndex, step in ipairs(path) do
-		task.delay(stepIndex * Config.MOVE_TWEEN_TIME, function()
+	-- Update the server's tile record step by step, matching the client's visual pace.
+	-- Step 0 (immediate): move to first tile right away so combat range is accurate.
+	playerTiles[player.UserId] = { tx = path[1][1], tz = path[1][2] }
+
+	for stepIndex = 2, #path do
+		local step = path[stepIndex]
+		task.delay((stepIndex - 1) * Config.MOVE_TWEEN_TIME, function()
 			if playerMoveSeq[player.UserId] == seq then
 				playerTiles[player.UserId] = { tx = step[1], tz = step[2] }
 			end
@@ -94,22 +103,20 @@ end)
 -- ─── Spawn ────────────────────────────────────────────────────────────────────
 Players.PlayerAdded:Connect(function(player)
 	player.CharacterAdded:Connect(function(character)
-		-- Wait for TileGrid to exist (it generates on server start)
 		local map = workspace:WaitForChild("Map", 30)
 		map:WaitForChild("TileGrid", 30)
 
-		-- Use the official spawn tile defined in TileGridService
 		local spawnTx, spawnTz = TileGrid.GetSpawnTile()
-		playerTiles[player.UserId] = { tx = spawnTx, tz = spawnTz }
+		playerTiles[player.UserId]   = { tx = spawnTx, tz = spawnTz }
 		playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
 
-		-- Hard-place the server-side HRP so hitboxes are correct from frame 1
-		local hrp = character:WaitForChild("HumanoidRootPart", 10)
-		local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 10)
+		local hrp      = character:WaitForChild("HumanoidRootPart", 10)
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+			or character:WaitForChild("Humanoid", 10)
 		if humanoid then
-			humanoid.WalkSpeed = 0
-			humanoid.JumpPower = 0
-			humanoid.AutoRotate = false
+			humanoid.WalkSpeed     = 0
+			humanoid.JumpPower     = 0
+			humanoid.AutoRotate    = false
 			humanoid.PlatformStand = false
 			humanoid.Died:Connect(function()
 				playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
@@ -118,19 +125,16 @@ Players.PlayerAdded:Connect(function(player)
 		if hrp then
 			hrp.Anchored = true
 			local wp = TileGrid.TileToWorld(spawnTx, spawnTz)
-			-- +3 Y so character stands on top of tile, matching client tileToWorld
 			hrp.CFrame = CFrame.new(wp.X, wp.Y + 3, wp.Z)
 		end
 
-		-- Tell THIS client where they spawned (triggers their initial snap)
-		-- Small wait ensures client scripts have loaded
 		task.wait(0.2)
 		PlayerMoved:FireClient(player, player.UserId, spawnTx, spawnTz)
 	end)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-	playerTiles[player.UserId] = nil
+	playerTiles[player.UserId]   = nil
 	playerMoveSeq[player.UserId] = nil
 end)
 
