@@ -23,6 +23,7 @@ BrainrotRPG/
     │   └── Modules/
     │       ├── Config.lua                    ✅
     │       ├── EnemyData.lua                 ✅
+    │       ├── ItemData.lua                  ✅  item templates, stat ranges, rarity pools
     │       ├── Pathfinder.lua                ✅
     │       ├── RerollSystem.lua              ✅
     │       └── Skills.lua                    ✅  (required by HUDController + SkillService)
@@ -36,6 +37,7 @@ BrainrotRPG/
     │       ├── MovementService.lua           ✅
     │       ├── SkillService.lua              ✅  Attack/Defense XP, level-up, SkillUpdated remote
     │       ├── EnemyService.lua              ✅
+    │       ├── LootService.lua               ✅  drop rolls, world items, auto-pickup, inventory
     │       └── CombatService.lua             ✅
     └── StarterPlayer/
         └── StarterPlayerScripts/
@@ -43,15 +45,13 @@ BrainrotRPG/
             ├── MovementController.lua        ✅  canonical movement (no .client. suffix)
             ├── CombatController.client.lua   ✅
             ├── HUDController.client.lua      ✅  HP bar + Attack/Defense skill bars
-            └── IsoCamera.client.lua          ✅  (correct location)
+            ├── IsoCamera.client.lua          ✅  (correct location)
+            └── DamageNumbers.client.lua      ✅  floating damage numbers over enemies/player
 ```
 
 **Still needed:**
 ```
-ReplicatedStorage/Modules/
-    ItemData.lua
 ServerScriptService/Services/
-    LootService.lua
     ShopService.lua
     DataService.lua           (full inventory/equipment persistence; Leaderboard covers Level/Kills/Coins)
 StarterPlayer/StarterPlayerScripts/
@@ -60,7 +60,6 @@ StarterPlayer/StarterPlayerScripts/
 StarterGui/
     InventoryGui
     ShopGui
-    DamageNumbers             (floating damage numbers)
 ```
 
 **Cleanup still pending:**
@@ -152,6 +151,26 @@ StarterGui/
 - `SkillService.GetDefenseReduction(player)` — returns damage reduction ratio
 - Fires `SkillUpdated` remote to client with `{ Attack={level,currentXP,neededXP}, Defense={...} }`
 
+### ✅ Loot System (ItemData.lua + LootService.lua)
+
+**ItemData.lua** — 50+ item templates across 6 slots (weapon, offhand, helmet, chest, legs, boots) and all 7 rarities. Each template has `slot`, `statType` (atk/def), `rarity`, `statMin/Max`, `name`, `icon`. Pre-builds `_byRarity` lookup table for O(1) pool access.
+
+**LootService.lua:**
+- `LootService.Drop(model, killer)` — called from `EnemyService._Kill`; checks drop chance by enemy rarity (25–100%), picks item rarity via weighted table, bumps tier for elite stars, rolls stat in `[statMin, statMax]`, spawns world Part
+- World drops: neon glowing sphere with PointLight and BillboardGui name label, bobbing animation, parented under `Workspace/Map/Loot`
+- Auto-pickup: 0.3 s tick loop checks if any player is within 1 tile (Manhattan); first player wins the item
+- On pickup: adds to in-memory `inventories[userId]` table, fires `InventoryUpdated` → client with serialized list
+- `LootService.GetInventory(player)` exposed; `GetInventory` RemoteFunction wired
+- Player inventories cleared on `PlayerRemoving`; DataService will persist them later
+
+**EnemyService._Kill patch:** `LootService` lazy-loaded and `Drop(model, killer)` called where the TODO was.
+
+### ✅ Floating Damage Numbers (DamageNumbers.client.lua)
+- Listens to `AttackResult` (damage we deal → white number over enemy) and `TakeDamage` (damage we take → red number over own character)
+- Spawns an invisible anchor Part at world position + random horizontal scatter, with a BillboardGui `AlwaysOnTop` label
+- Tweens anchor upward (`FLOAT_RISE = 5` studs over `0.9 s`); fades text out in the second half via delayed tween
+- Cleans up anchor + billboard on completion; no memory leak
+
 ### ✅ HUD (HUDController.client.lua)
 - Bottom-left panel: HP bar, Attack skill bar, Defense skill bar
 - Reactive: `Humanoid.HealthChanged` for HP; `SkillUpdated` remote for skill bars
@@ -233,8 +252,8 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [x] Leaderboard with DataStore (Level, Kills, Coins)
 - [x] Sound effect hooks (placeholder IDs)
 - [x] Death input lockout (movement + combat)
-- [ ] Floating damage numbers
-- [ ] Loot drops (ItemData + LootService)
+- [x] Floating damage numbers
+- [x] Loot drops (ItemData + LootService)
 - [ ] Inventory system + UI
 - [ ] Item equip system + player stat scaling
 - [ ] Item reroll UI
@@ -266,3 +285,6 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - Leaderboard uses formatted suffixes (K/M/B…) — raw numbers stored in DataStore, formatted on display
 - `MovementBootstrap.client.lua` wraps `MovementController.lua` so it runs as a LocalScript without the `.client.` suffix
 - `Skills.lua` module in ReplicatedStorage/Modules defines `Skills.ATTACK` / `Skills.DEFENSE` string constants shared by server and client
+- Loot drop chain: `EnemyService._Kill` → `LootService.Drop(model, killer)` → world Part in `Workspace/Map/Loot` → 0.3s pickup loop → `InventoryUpdated` remote
+- Item stat is a single rolled integer (`stat`); `statType` is "atk" or "def" — equip system will apply it as a flat bonus
+- `ItemData._byRarity[rarityName]` is a pre-built array of template name strings for fast random picks
