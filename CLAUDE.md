@@ -144,12 +144,23 @@ StarterGui/
 - Server: per-player attack loop with `AUTO_ATTACK_INTERVAL` throttle
 - Dead players blocked from movement and combat (client + server)
 
-### ✅ Skills (SkillService + Skills.lua module)
-- Attack and Defense skills with XP and level-up curve
-- `SkillService.GrantAttackXP(player, amount)` — called by CombatService on hit
-- `SkillService.GrantDefenseXP(player, amount)` — called by EnemyService._DamagePlayer
-- `SkillService.GetDefenseReduction(player)` — returns damage reduction ratio
-- Fires `SkillUpdated` remote to client with `{ Attack={level,currentXP,neededXP}, Defense={...} }`
+### ✅ Skills (Skills.lua + SkillService.lua)
+
+**Skills.lua** (ReplicatedStorage/Modules — shared):
+- Constants: `Skills.ATTACK = "Attack"`, `Skills.DEFENSE = "Defense"`, `Skills.MAX_LEVEL = 99`
+- Pre-built `XP_TABLE[level]` — cumulative XP to reach each level; base 100 XP, ×1.35 scale per tier
+- `Skills.LevelFromXP(totalXP)` → level number
+- `Skills.XPProgress(totalXP)` → `(currentXP, neededXP)` within current level
+
+**SkillService.lua** (ServerScriptService/Services):
+- Per-player `skillData[userId]` table with `totalXP` for each skill; initialized on `PlayerAdded`
+- `GrantAttackXP(player, amount)` / `GrantDefenseXP(player, amount)` — 0.1s debounce prevents multi-grant per swing; prints level-up to console
+- `GetAttackBonus(player)` → `(level-1) * 0.5` flat ATK added to base damage
+- `GetDefenseReduction(player)` → `level / (level + 80)`, capped at 0.75 (≈55% at lvl 99)
+- Fires `SkillUpdated` remote after every grant with `{ Attack={level, currentXP, neededXP, totalXP}, Defense={…} }`
+- On `CharacterAdded` fires initial state after 0.5s so HUD populates on spawn
+
+**CombatService patch:** `doAttack` now calls `SkillService.GetAttackBonus(player)` to add to base 10 damage, and `SkillService.GrantAttackXP(player, 2)` on every hit.
 
 ### ✅ Loot System (ItemData.lua + LootService.lua)
 
@@ -279,9 +290,10 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 ---
 
 ## 🔑 Key Implementation Notes
-- Enemy defense reduction: `SkillService.GetDefenseReduction(player)` → ratio; `finalDamage = max(1, floor(amount*(1-reduction)))`
-- Attack XP granted in CombatService on successful hit; Defense XP in EnemyService._DamagePlayer
-- `SkillUpdated` fires after every XP grant with full payload for both skills
+- Enemy defense reduction: `level / (level + 80)` capped at 0.75; `finalDamage = max(1, floor(amount*(1-reduction)))`
+- Attack bonus: `(level-1) * 0.5` flat, added in `doAttack` before the ±10% roll
+- Attack XP: 2 XP per hit (CombatService); Defense XP: 1 XP per hit taken (EnemyService._DamagePlayer); both debounced at 0.1s
+- `SkillUpdated` fires after every XP grant with full payload for both skills; also fires on CharacterAdded (0.5s delay) for HUD init
 - Leaderboard uses formatted suffixes (K/M/B…) — raw numbers stored in DataStore, formatted on display
 - `MovementBootstrap.client.lua` wraps `MovementController.lua` so it runs as a LocalScript without the `.client.` suffix
 - `Skills.lua` module in ReplicatedStorage/Modules defines `Skills.ATTACK` / `Skills.DEFENSE` string constants shared by server and client
