@@ -12,6 +12,7 @@ local Remotes       = ReplicatedStorage:WaitForChild("Remotes")
 -- Lazy-require to avoid circular dependency at load time
 local EnemyService
 local MovementService
+local SkillService
 
 -- Remotes needed
 local RequestAttack  = Remotes:WaitForChild("RequestAttack")   -- Client → Server  (enemyId)
@@ -55,6 +56,7 @@ end
 -- ─── Attack tick (called by the per-player loop) ──────────────────────────────
 local function doAttack(player: Player)
 	if not EnemyService then EnemyService = require(script.Parent.EnemyService) end
+	if not SkillService  then SkillService  = require(script.Parent.SkillService)  end
 	if not isPlayerAlive(player) then
 		playerTargets[player.UserId] = nil
 		playerLoops[player.UserId] = false
@@ -69,6 +71,17 @@ local function doAttack(player: Player)
 		AttackResult:FireClient(player, false, 0, enemyId, 0)
 		return
 	end
+
+	local baseDamage = 10 + SkillService.GetAttackBonus(player)
+	local damage     = math.random(math.floor(baseDamage * 0.9), math.ceil(baseDamage * 1.1))
+
+	EnemyService.DamageEnemy(enemyId, damage, player)
+	SkillService.GrantAttackXP(player, 2)
+
+	local model = EnemyService.GetEnemy(enemyId)
+	local remainingHP = model and model:GetAttribute("CurrentHP") or 0
+	AttackResult:FireClient(player, true, damage, enemyId, remainingHP)
+end
 
 	-- Simple flat damage for now — replace with player stat lookup later
 	local baseDamage = 10  -- TODO: read from player equipment stats
