@@ -4,40 +4,40 @@ local data = dataStore:GetDataStore("Stats")
 local Players = game:GetService("Players")
 
 local function format(number)
-    local suffixes = {
-        {"",   1},
-        {"K",  1e3},
-        {"M",  1e6},
-        {"B",  1e9},
-        {"T",  1e12},
-        {"Qa", 1e15},
-        {"Qn", 1e18},
-        {"Sx", 1e21},
-        {"Sp", 1e24},
-        {"Oc", 1e27},
-        {"No", 1e30},
-        {"Dc", 1e33},
-        {"Ud", 1e36},
-        {"Dd", 1e39},
-        {"Td", 1e42},
-        {"Qad",1e45},
-        {"Qid",1e48},
-        {"Sxd",1e51},
-        {"Spd",1e54},
-        {"Ocd",1e57},
-        {"Nod",1e60},
-        {"Vg", 1e63},
-        {"Uvg",1e66},
-        {"Dvg",1e69},
-        {"Tvg",1e72},
-        {"Qavg",1e75},
-        {"Qivg",1e78},
-        {"Sxvg",1e81},
-        {"Spvg",1e84},
-        {"Ocvg",1e87},
-        {"Novg",1e90},
-        {"C", 1e303} -- Centillion
-    }
+	local suffixes = {
+		{"",    1},      -- One
+		{"K",   1e3},    -- Thousand
+		{"M",   1e6},    -- Million
+		{"B",   1e9},    -- Billion
+		{"T",   1e12},   -- Trillion
+		{"Qa",  1e15},   -- Quadrillion
+		{"Qn",  1e18},   -- Quintillion
+		{"Sx",  1e21},   -- Sextillion
+		{"Sp",  1e24},   -- Septillion
+		{"Oc",  1e27},   -- Octillion
+		{"No",  1e30},   -- Nonillion
+		{"Dc",  1e33},   -- Decillion
+		{"Ud",  1e36},   -- Undecillion
+		{"Dd",  1e39},   -- Duodecillion
+		{"Td",  1e42},   -- Tredecillion
+		{"Qad", 1e45},   -- Quattuordecillion
+		{"Qid", 1e48},   -- Quindecillion
+		{"Sxd", 1e51},   -- Sexdecillion
+		{"Spd", 1e54},   -- Septendecillion
+		{"Ocd", 1e57},   -- Octodecillion
+		{"Nod", 1e60},   -- Novemdecillion
+		{"Vg",  1e63},   -- Vigintillion
+		{"Uvg", 1e66},   -- Unvigintillion
+		{"Dvg", 1e69},   -- Duovigintillion
+		{"Tvg", 1e72},   -- Trevigintillion
+		{"Qavg",1e75},   -- Quattuorvigintillion
+		{"Qivg",1e78},   -- Quinvigintillion
+		{"Sxvg",1e81},   -- Sexvigintillion
+		{"Spvg",1e84},   -- Septenvigintillion
+		{"Ocvg",1e87},   -- Octovigintillion
+		{"Novg",1e90},   -- Novemvigintillion
+		{"C",   1e303}   -- Centillion
+	}
     if number < 1000 then
         return tostring(math.floor(number))
     end
