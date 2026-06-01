@@ -25,6 +25,9 @@ local EVENTS = {
 	"AttackResult",       -- Server → Client  (hit, damage, enemyId, remainingHP)
 	"StopAttack",         -- Client → Server  ()
 
+	-- Skills
+	"SkillUpdated",       -- Server → Client  (payload table: { Attack={level,currentXP,neededXP}, Defense={...} })
+
 	-- Reroll
 	"RerollRequest",      -- Client → Server  (itemId1, itemId2, itemId3)
 	"RerollResult",       -- Server → Client  (newItemData | false)
@@ -42,17 +45,17 @@ local FUNCTIONS = {
 
 for _, name in ipairs(EVENTS) do
 	if not remotesFolder:FindFirstChild(name) then
-		local e = Instance.new("RemoteEvent")
-		e.Name = name
-		e.Parent = remotesFolder
+		local e    = Instance.new("RemoteEvent")
+		e.Name     = name
+		e.Parent   = remotesFolder
 	end
 end
 
 for _, name in ipairs(FUNCTIONS) do
 	if not remotesFolder:FindFirstChild(name) then
-		local f = Instance.new("RemoteFunction")
-		f.Name = name
-		f.Parent = remotesFolder
+		local f    = Instance.new("RemoteFunction")
+		f.Name     = name
+		f.Parent   = remotesFolder
 	end
 end
 
