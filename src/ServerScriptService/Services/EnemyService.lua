@@ -31,6 +31,7 @@ local TileGrid    = require(script.Parent.TileGridService)
 
 local MovementService
 local SkillService
+local LootService
 
 local Remotes       = ReplicatedStorage:WaitForChild("Remotes")
 local EnemyDied     = Remotes:WaitForChild("EnemyDied")
@@ -568,7 +569,10 @@ function EnemyService._Kill(id: string, killer: Player?)
 	local worldPos = tileToWorld(dtx, dtz)
 	EnemyDied:FireAllClients(id, worldPos)
 
-	-- TODO: trigger LootService.Drop(model, killer) here
+	if not LootService then
+    LootService = require(script.Parent.LootService)
+	end
+	LootService.Drop(model, killer)
 
 	task.delay(0.5, function()
 		if model and model.Parent then model:Destroy() end
