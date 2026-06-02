@@ -1,23 +1,5 @@
 -- ServerScriptService/Services/EnemyService.lua
 -- Manages all enemy lifecycle: spawn, wander, chase player, attack, die, drop loot.
---
--- Each enemy is a Model in Workspace/Map/Enemies with:
---   PrimaryPart = "HRP" (a Part used as the hitbox/position anchor)
---   Attributes:
---     EnemyId     (string, unique)
---     EnemyName   (string)
---     Rarity      (string)
---     Stars       (number, 0 = normal)
---     MaxHP       (number)
---     CurrentHP   (number)
---     Damage      (number)
---     SpawnTileX  (number)
---     SpawnTileZ  (number)
---     WanderRange (number)  -- tiles from spawn it may wander
---     AggroRange  (number)  -- tiles from enemy to detect player
---     CurrentTileX(number)
---     CurrentTileZ(number)
---     State        (string) "wander" | "chase" | "attack" | "dead"
 
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
@@ -41,23 +23,28 @@ local TakeDamage    = Remotes:WaitForChild("TakeDamage")
 local EnemyService = {}
 
 -- ─── Internal state ───────────────────────────────────────────────────────────
-local enemies = {}
+local enemies      = {}
 local enemyThreads = {}
 local enemyFolder
 
+-- occupiedTiles: key "tx_tz" → enemyId
 local occupiedTiles = {}
 
 local function occupyTile(tx, tz, id)
 	occupiedTiles[tx .. "_" .. tz] = id
 end
 local function releaseTile(tx, tz, id)
-	local key = tx .. "_" .. tz
-	if occupiedTiles[key] == id then
-		occupiedTiles[key] = nil
+	local k = tx .. "_" .. tz
+	if occupiedTiles[k] == id then
+		occupiedTiles[k] = nil
 	end
 end
 local function isTileOccupied(tx, tz)
 	return occupiedTiles[tx .. "_" .. tz] ~= nil
+end
+local function isTileOccupiedByOther(tx, tz, id)
+	local occupant = occupiedTiles[tx .. "_" .. tz]
+	return occupant ~= nil and occupant ~= id
 end
 local function isModelBlockingTile(model: Model, tx: number, tz: number): boolean
 	if model:GetAttribute("State") == "dead" then return false end
@@ -67,10 +54,6 @@ local function isModelBlockingTile(model: Model, tx: number, tz: number): boolea
 	local movingZ  = model:GetAttribute("MovingToTileZ")
 	return (currentX == tx and currentZ == tz) or (movingX == tx and movingZ == tz)
 end
-local function isTileOccupiedByOther(tx, tz, id)
-	local occupant = occupiedTiles[tx .. "_" .. tz]
-	return occupant ~= nil and occupant ~= id
-end
 local function isPlayerTileOccupied(tx, tz)
 	if not MovementService then
 		MovementService = require(script.Parent.MovementService)
@@ -78,7 +61,18 @@ local function isPlayerTileOccupied(tx, tz)
 	return MovementService.IsPlayerTileOccupied(tx, tz)
 end
 local function isPassable(tx, tz)
-	return TileGrid.IsWalkable(tx, tz) and not isTileOccupied(tx, tz) and not isPlayerTileOccupied(tx, tz)
+	return TileGrid.IsWalkable(tx, tz)
+		and not isTileOccupied(tx, tz)
+		and not isPlayerTileOccupied(tx, tz)
+end
+-- FIX: wander/chase pathfinding uses this variant so the enemy's own
+-- current tile is not treated as blocked (it owns that tile).
+local function isPassableForEnemy(tx, tz, id)
+	if not TileGrid.IsWalkable(tx, tz) then return false end
+	if isPlayerTileOccupied(tx, tz) then return false end
+	local occupant = occupiedTiles[tx .. "_" .. tz]
+	-- Passable if unoccupied OR occupied by self
+	return occupant == nil or occupant == id
 end
 
 -- ─── Tween config ─────────────────────────────────────────────────────────────
@@ -93,10 +87,6 @@ local function newId(): string
 end
 
 -- ─── Tile helpers ─────────────────────────────────────────────────────────────
-local function isWalkable(tx, tz)
-	return TileGrid.IsWalkable(tx, tz)
-end
-
 local function tileToWorld(tx, tz): Vector3
 	return TileGrid.TileToWorld(tx, tz)
 end
@@ -127,9 +117,9 @@ local function getTilePivotPosition(model: Model, tx: number, tz: number): Vecto
 end
 
 local function tweenModelPivot(model: Model, targetCF: CFrame, tweenInfo: TweenInfo)
-	local pivotValue = Instance.new("CFrameValue")
-	pivotValue.Value = model:GetPivot()
-	local connection = pivotValue.Changed:Connect(function(value)
+	local pivotValue   = Instance.new("CFrameValue")
+	pivotValue.Value   = model:GetPivot()
+	local connection   = pivotValue.Changed:Connect(function(value)
 		if model.Parent then model:PivotTo(value) end
 	end)
 	local tween = TweenService:Create(pivotValue, tweenInfo, { Value = targetCF })
@@ -143,7 +133,7 @@ local function manhattan(ax, az, bx, bz): number
 	return math.abs(ax - bx) + math.abs(az - bz)
 end
 
--- ─── Movement helper for enemies ─────────────────────────────────────────────
+-- ─── Movement helper ──────────────────────────────────────────────────────────
 local function moveEnemyToTile(model, tx, tz)
 	if not model.PrimaryPart then return end
 	local id    = model:GetAttribute("EnemyId")
@@ -172,6 +162,8 @@ local function moveEnemyToTile(model, tx, tz)
 
 	model:SetAttribute("CurrentTileX", tx)
 	model:SetAttribute("CurrentTileZ", tz)
+	-- FIX: always clear MovingTo after the tween completes so _Kill
+	-- does not try to double-release a tile that is already released.
 	model:SetAttribute("MovingToTileX", nil)
 	model:SetAttribute("MovingToTileZ", nil)
 end
@@ -209,26 +201,26 @@ local function buildOverheadGui(model: Model, enemyName: string, rarity: string,
 	nameLabel.Text   = starStr .. enemyName
 	nameLabel.Parent = billboard
 
-	local barBG                  = Instance.new("Frame")
-	barBG.Name                   = "BarBG"
-	barBG.Size                   = UDim2.new(1, 0, 0.32, 0)
-	barBG.Position               = UDim2.new(0, 0, 0.55, 0)
-	barBG.BackgroundColor3       = Color3.fromRGB(40, 40, 40)
-	barBG.BorderSizePixel        = 0
-	barBG.Parent                 = billboard
-	local corner1                = Instance.new("UICorner")
-	corner1.CornerRadius         = UDim.new(0, 3)
-	corner1.Parent               = barBG
+	local barBG              = Instance.new("Frame")
+	barBG.Name               = "BarBG"
+	barBG.Size               = UDim2.new(1, 0, 0.32, 0)
+	barBG.Position           = UDim2.new(0, 0, 0.55, 0)
+	barBG.BackgroundColor3   = Color3.fromRGB(40, 40, 40)
+	barBG.BorderSizePixel    = 0
+	barBG.Parent             = billboard
+	local corner1            = Instance.new("UICorner")
+	corner1.CornerRadius     = UDim.new(0, 3)
+	corner1.Parent           = barBG
 
-	local barFill                = Instance.new("Frame")
-	barFill.Name                 = "BarFill"
-	barFill.Size                 = UDim2.new(1, 0, 1, 0)
-	barFill.BackgroundColor3     = Color3.fromRGB(80, 200, 80)
-	barFill.BorderSizePixel      = 0
-	barFill.Parent               = barBG
-	local corner2                = Instance.new("UICorner")
-	corner2.CornerRadius         = UDim.new(0, 3)
-	corner2.Parent               = barFill
+	local barFill            = Instance.new("Frame")
+	barFill.Name             = "BarFill"
+	barFill.Size             = UDim2.new(1, 0, 1, 0)
+	barFill.BackgroundColor3 = Color3.fromRGB(80, 200, 80)
+	barFill.BorderSizePixel  = 0
+	barFill.Parent           = barBG
+	local corner2            = Instance.new("UICorner")
+	corner2.CornerRadius     = UDim.new(0, 3)
+	corner2.Parent           = barFill
 
 	return billboard
 end
@@ -262,20 +254,21 @@ function EnemyService.Spawn(spawnDef: {
 		return nil
 	end
 
-	local stars  = spawnDef.forceStars or 0
+	local stars   = spawnDef.forceStars or 0
 	if stars == 0 and math.random() < Config.ELITE_SPAWN_CHANCE then
 		stars = math.random(1, Config.ELITE_STAR_MAX)
 	end
 
 	local hpMult  = stars > 0 and Config.ELITE_HP_MULT[stars]  or 1
 	local dmgMult = stars > 0 and Config.ELITE_DMG_MULT[stars] or 1
-
-	local maxHP = math.floor(data.hp  * hpMult)
-	local dmg   = math.floor(data.dmg * dmgMult)
+	local maxHP   = math.floor(data.hp  * hpMult)
+	local dmg     = math.floor(data.dmg * dmgMult)
 
 	local id = newId()
-	if isTileOccupied(spawnDef.tx, spawnDef.tz) or isPlayerTileOccupied(spawnDef.tx, spawnDef.tz) then
-		warn("[EnemyService] Spawn tile is occupied: " .. tostring(spawnDef.tx) .. "," .. tostring(spawnDef.tz))
+	if isTileOccupied(spawnDef.tx, spawnDef.tz)
+		or isPlayerTileOccupied(spawnDef.tx, spawnDef.tz) then
+		warn("[EnemyService] Spawn tile occupied: "
+			.. tostring(spawnDef.tx) .. "," .. tostring(spawnDef.tz))
 		return nil
 	end
 
@@ -286,26 +279,25 @@ function EnemyService.Spawn(spawnDef: {
 	if template then
 		model      = template:Clone()
 		model.Name = spawnDef.name .. "_" .. id
-		local rootPart = model.PrimaryPart
-		if rootPart then
+		if model.PrimaryPart then
 			prepareModelParts(model)
 			groundModelOnTile(model, spawnDef.tx, spawnDef.tz)
 		else
-			warn("[EnemyService] '" .. spawnDef.name .. "' has no PrimaryPart — set it in Studio.")
+			warn("[EnemyService] '" .. spawnDef.name .. "' has no PrimaryPart.")
 		end
 	else
 		warn("[EnemyService] No model for '" .. spawnDef.name .. "' — using cube.")
 		model      = Instance.new("Model")
 		model.Name = spawnDef.name .. "_" .. id
-		local cube        = Instance.new("Part")
-		cube.Name         = "RootPart"
-		cube.Size         = Vector3.new(Config.TILE_SIZE * 0.7, Config.TILE_SIZE * 0.7, Config.TILE_SIZE * 0.7)
-		cube.Anchored     = true
-		cube.CanCollide   = false
-		cube.Color        = RARITY_COLORS[data.lootRarity] or Color3.new(0.8, 0.8, 0.8)
-		cube.Material     = Enum.Material.SmoothPlastic
-		cube.Parent       = model
-		model.PrimaryPart = cube
+		local cube           = Instance.new("Part")
+		cube.Name            = "RootPart"
+		cube.Size            = Vector3.new(Config.TILE_SIZE * 0.7, Config.TILE_SIZE * 0.7, Config.TILE_SIZE * 0.7)
+		cube.Anchored        = true
+		cube.CanCollide      = false
+		cube.Color           = RARITY_COLORS[data.lootRarity] or Color3.new(0.8, 0.8, 0.8)
+		cube.Material        = Enum.Material.SmoothPlastic
+		cube.Parent          = model
+		model.PrimaryPart    = cube
 		prepareModelParts(model)
 		groundModelOnTile(model, spawnDef.tx, spawnDef.tz)
 	end
@@ -344,9 +336,9 @@ local function getClosestPlayerTile(fromX: number, fromZ: number)
 	if not MovementService then
 		MovementService = require(script.Parent.MovementService)
 	end
-	local bestPlayer = nil
-	local bestDist   = math.huge
-	local bestTx, bestTz = fromX, fromZ
+	local bestPlayer         = nil
+	local bestDist           = math.huge
+	local bestTx, bestTz     = fromX, fromZ
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		local character = player.Character
@@ -366,7 +358,7 @@ local function getClosestPlayerTile(fromX: number, fromZ: number)
 end
 
 -- ─── Wander target ────────────────────────────────────────────────────────────
-local function pickWanderTarget(model: Model): (number, number)
+local function pickWanderTarget(model: Model, id: string): (number, number)
 	local sx    = model:GetAttribute("SpawnTileX")
 	local sz    = model:GetAttribute("SpawnTileZ")
 	local range = model:GetAttribute("WanderRange")
@@ -375,7 +367,9 @@ local function pickWanderTarget(model: Model): (number, number)
 		local dz = math.random(-range, range)
 		local tx = math.clamp(sx + dx, 1, Config.GRID_WIDTH)
 		local tz = math.clamp(sz + dz, 1, Config.GRID_HEIGHT)
-		if isPassable(tx, tz) then return tx, tz end
+		-- FIX: use self-aware passable check so the enemy's own tile
+		-- is always considered walkable (avoids immediate nil path).
+		if isPassableForEnemy(tx, tz, id) then return tx, tz end
 	end
 	return sx, sz
 end
@@ -387,7 +381,7 @@ function EnemyService._AILoop(id: string)
 	local WANDER_PAUSE_MIN = 2.0
 	local WANDER_PAUSE_MAX = 4.0
 	local CHASE_TICK       = 0.05
-	local ATTACK_CHECK     = 0.3
+	local ATTACK_CHECK     = 0.3  -- seconds between attack/check; unused directly below
 
 	while true do
 		local model = enemies[id]
@@ -400,37 +394,42 @@ function EnemyService._AILoop(id: string)
 
 		local targetPlayer, ptx, ptz, dist = getClosestPlayerTile(cx, cz)
 
+		-- FIX: replaced all task.wait(0)+continue patterns with
+		-- if/elseif so the scheduler isn't yielded on every state change.
 		if state == "dead" then
 			break
 
 		elseif state == "wander" then
 			if targetPlayer and dist <= aggroRange then
 				model:SetAttribute("State", "chase")
-				task.wait(0)
-				continue
-			end
-
-			local wx, wz = pickWanderTarget(model)
-			local path   = Pathfinder.FindPath(isPassable, cx, cz, wx, wz, 200)
-
-			if path and #path > 0 then
-				for _, step in ipairs(path) do
-					local m2 = enemies[id]
-					if not m2 or not m2.Parent then break end
-					if m2:GetAttribute("State") ~= "wander" then break end
-
-					local cx2 = m2:GetAttribute("CurrentTileX")
-					local cz2 = m2:GetAttribute("CurrentTileZ")
-					local _, _, _, d2 = getClosestPlayerTile(cx2, cz2)
-					if d2 and d2 <= aggroRange then
-						m2:SetAttribute("State", "chase")
-						break
-					end
-					moveEnemyToTile(m2, step[1], step[2])
+				-- No wait — loop immediately with new state
+			else
+				-- FIX: pass id so wander finder uses self-aware passable
+				local wx, wz = pickWanderTarget(model, id)
+				local function isPassableW(tx, tz)
+					return isPassableForEnemy(tx, tz, id)
 				end
-			end
+				local path = Pathfinder.FindPath(isPassableW, cx, cz, wx, wz, 200)
 
-			task.wait(math.random() * (WANDER_PAUSE_MAX - WANDER_PAUSE_MIN) + WANDER_PAUSE_MIN)
+				if path and #path > 0 then
+					for _, step in ipairs(path) do
+						local m2 = enemies[id]
+						if not m2 or not m2.Parent then break end
+						if m2:GetAttribute("State") ~= "wander" then break end
+
+						local cx2 = m2:GetAttribute("CurrentTileX")
+						local cz2 = m2:GetAttribute("CurrentTileZ")
+						local _, _, _, d2 = getClosestPlayerTile(cx2, cz2)
+						if d2 and d2 <= aggroRange then
+							m2:SetAttribute("State", "chase")
+							break
+						end
+						moveEnemyToTile(m2, step[1], step[2])
+					end
+				end
+
+				task.wait(math.random() * (WANDER_PAUSE_MAX - WANDER_PAUSE_MIN) + WANDER_PAUSE_MIN)
+			end
 
 		elseif state == "chase" then
 			local m = enemies[id]
@@ -438,38 +437,38 @@ function EnemyService._AILoop(id: string)
 
 			if not targetPlayer or dist > aggroRange * 1.5 then
 				m:SetAttribute("State", "wander")
-				task.wait(0)
-				continue
-			end
-
-			if dist == 1 then
+				-- No wait — loop immediately
+			elseif dist == 1 then
 				m:SetAttribute("State", "attack")
-				task.wait(0)
-				continue
-			end
+				-- No wait — loop immediately
+			else
+				local cx2 = m:GetAttribute("CurrentTileX")
+				local cz2 = m:GetAttribute("CurrentTileZ")
 
-			local cx2 = m:GetAttribute("CurrentTileX")
-			local cz2 = m:GetAttribute("CurrentTileZ")
+				local function isPassableC(tx, tz)
+					return isPassableForEnemy(tx, tz, id)
+				end
 
-			local goals   = { {ptx+1,ptz}, {ptx-1,ptz}, {ptx,ptz+1}, {ptx,ptz-1} }
-			local bestPath = nil
-			for _, goal in ipairs(goals) do
-				local gx, gz = goal[1], goal[2]
-				if gx == cx2 and gz == cz2 then bestPath = {} break end
-				if isPassable(gx, gz) then
-					local candidate = Pathfinder.FindPath(isPassable, cx2, cz2, gx, gz, 300)
-					if candidate and (not bestPath or #candidate < #bestPath) then
-						bestPath = candidate
+				local goals = { {ptx+1,ptz}, {ptx-1,ptz}, {ptx,ptz+1}, {ptx,ptz-1} }
+				local bestPath = nil
+				for _, goal in ipairs(goals) do
+					local gx, gz = goal[1], goal[2]
+					if gx == cx2 and gz == cz2 then bestPath = {} break end
+					if isPassableC(gx, gz) then
+						local candidate = Pathfinder.FindPath(isPassableC, cx2, cz2, gx, gz, 300)
+						if candidate and (not bestPath or #candidate < #bestPath) then
+							bestPath = candidate
+						end
 					end
 				end
-			end
 
-			if bestPath and #bestPath > 0 then
-				local step = bestPath[1]
-				moveEnemyToTile(m, step[1], step[2])
-			end
+				if bestPath and #bestPath > 0 then
+					local step = bestPath[1]
+					moveEnemyToTile(m, step[1], step[2])
+				end
 
-			task.wait(CHASE_TICK)
+				task.wait(CHASE_TICK)
+			end
 
 		elseif state == "attack" then
 			local m = enemies[id]
@@ -477,55 +476,54 @@ function EnemyService._AILoop(id: string)
 
 			if not targetPlayer then
 				m:SetAttribute("State", "wander")
-				task.wait(0)
-				continue
+				-- No wait — loop immediately
+			else
+				local cx2 = m:GetAttribute("CurrentTileX")
+				local cz2 = m:GetAttribute("CurrentTileZ")
+				local _, ptx2, ptz2, dist2 = getClosestPlayerTile(cx2, cz2)
+
+				if dist2 ~= 1 then
+					m:SetAttribute("State", "chase")
+					-- No wait — loop immediately
+				else
+					if m.PrimaryPart then
+						local playerWorldPos = tileToWorld(ptx2, ptz2)
+						local pivotPos = m:GetPivot().Position
+						local facedCF  = CFrame.new(pivotPos,
+							Vector3.new(playerWorldPos.X, pivotPos.Y, playerWorldPos.Z))
+						task.spawn(tweenModelPivot, m, facedCF, TURN_TWEEN)
+					end
+
+					local dmg = m:GetAttribute("Damage")
+					EnemyService._DamagePlayer(targetPlayer, dmg, id)
+
+					task.wait(Config.ENEMY_ATTACK_INTERVAL)
+				end
 			end
-
-			local cx2 = m:GetAttribute("CurrentTileX")
-			local cz2 = m:GetAttribute("CurrentTileZ")
-			local _, ptx2, ptz2, dist2 = getClosestPlayerTile(cx2, cz2)
-
-			if dist2 ~= 1 then
-				m:SetAttribute("State", "chase")
-				task.wait(0)
-				continue
-			end
-
-			if m.PrimaryPart then
-				local playerWorldPos = tileToWorld(ptx2, ptz2)
-				local pivotPos = m:GetPivot().Position
-				local facedCF  = CFrame.new(pivotPos, Vector3.new(playerWorldPos.X, pivotPos.Y, playerWorldPos.Z))
-				task.spawn(tweenModelPivot, m, facedCF, TURN_TWEEN)
-			end
-
-			local dmg = m:GetAttribute("Damage")
-			EnemyService._DamagePlayer(targetPlayer, dmg, id)
-
-			task.wait(Config.ENEMY_ATTACK_INTERVAL)
+		else
+			-- Unknown state: reset to wander
+			model:SetAttribute("State", "wander")
+			task.wait(1)
 		end
 	end
 end
 
--- ─── Damage player (with defense skill reduction + def XP) ────────────────────
+-- ─── Damage player ────────────────────────────────────────────────────────────
 function EnemyService._DamagePlayer(player: Player, amount: number, sourceId: string)
 	local char = player.Character
 	if not char then return end
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then return end
 
-	-- Lazy-load SkillService
 	if not SkillService then
 		SkillService = require(script.Parent.SkillService)
 	end
 
-	-- Apply defense skill reduction
 	local reduction   = SkillService.GetDefenseReduction(player)
 	local finalDamage = math.max(1, math.floor(amount * (1 - reduction)))
 
 	humanoid:TakeDamage(finalDamage)
 	TakeDamage:FireClient(player, player.UserId, finalDamage)
-
-	-- Grant 1 defense XP (debounced inside SkillService — only 1 per attack round)
 	SkillService.GrantDefenseXP(player, 1)
 end
 
@@ -563,14 +561,19 @@ function EnemyService._Kill(id: string, killer: Player?)
 	local dtz     = model:GetAttribute("CurrentTileZ")
 	local movingX = model:GetAttribute("MovingToTileX")
 	local movingZ = model:GetAttribute("MovingToTileZ")
+
+	-- FIX: release current tile unconditionally; only release the moving
+	-- tile if it differs from current (tween may have already cleared it).
 	releaseTile(dtx, dtz, id)
-	if movingX and movingZ then releaseTile(movingX, movingZ, id) end
+	if movingX and movingZ and (movingX ~= dtx or movingZ ~= dtz) then
+		releaseTile(movingX, movingZ, id)
+	end
 
 	local worldPos = tileToWorld(dtx, dtz)
 	EnemyDied:FireAllClients(id, worldPos)
 
 	if not LootService then
-    LootService = require(script.Parent.LootService)
+		LootService = require(script.Parent.LootService)
 	end
 	LootService.Drop(model, killer)
 
@@ -585,7 +588,6 @@ function EnemyService.GetEnemy(id: string)
 	return enemies[id]
 end
 
--- NEW: returns the enemy model currently standing on a specific tile (or nil)
 function EnemyService.GetEnemyAtTile(tx: number, tz: number): Model?
 	for _, model in pairs(enemies) do
 		if model:GetAttribute("State") ~= "dead" then
@@ -626,8 +628,8 @@ do
 	local map = workspace:WaitForChild("Map", 30)
 	enemyFolder = map:FindFirstChild("Enemies")
 	if not enemyFolder then
-		enemyFolder       = Instance.new("Folder")
-		enemyFolder.Name  = "Enemies"
+		enemyFolder        = Instance.new("Folder")
+		enemyFolder.Name   = "Enemies"
 		enemyFolder.Parent = map
 	end
 

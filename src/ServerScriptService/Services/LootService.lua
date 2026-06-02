@@ -6,9 +6,6 @@
 --   4. Spawn a glowing Part in the world at the death position.
 --   5. Fire ItemDropped → all nearby clients (visual beacon).
 --   6. When a player walks onto the tile, auto-pickup → InventoryUpdated → client.
---
--- Inventory is a simple per-player table for now (no DataStore yet).
--- DataService will persist it later; this module exposes GetInventory(player).
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,8 +20,8 @@ local InventoryUpdated = Remotes:WaitForChild("InventoryUpdated")
 
 local LootService = {}
 
--- ─── In-memory inventory: userId → { [itemId] = itemInstance } ───────────────
-local inventories = {}   -- populated on PlayerAdded
+-- ─── In-memory inventory ──────────────────────────────────────────────────────
+local inventories = {}
 
 local function getInventory(player: Player)
 	if not inventories[player.UserId] then
@@ -33,15 +30,14 @@ local function getInventory(player: Player)
 	return inventories[player.UserId]
 end
 
--- ─── Item instance ID generator ───────────────────────────────────────────────
+-- ─── Item ID generator ────────────────────────────────────────────────────────
 local nextItemId = 0
 local function newItemId(): string
 	nextItemId += 1
 	return "I" .. nextItemId
 end
 
--- ─── Rarity → drop chance (0–1) ───────────────────────────────────────────────
--- Higher-rarity enemies drop items more reliably.
+-- ─── Rarity → drop chance ─────────────────────────────────────────────────────
 local DROP_CHANCE = {
 	Common    = 0.25,
 	Rare      = 0.40,
@@ -52,9 +48,7 @@ local DROP_CHANCE = {
 	Secret    = 1.00,
 }
 
--- ─── Rarity → which item rarity pools to draw from ────────────────────────────
--- Enemy rarity maps to a weighted list of item rarity tiers it can drop.
--- Format: { {rarityName, weight}, ... }
+-- ─── Enemy rarity → item rarity pool ─────────────────────────────────────────
 local ENEMY_LOOT_TABLE = {
 	Common    = { {"Common", 90}, {"Rare", 10} },
 	Rare      = { {"Common", 60}, {"Rare", 30}, {"VeryRare", 10} },
@@ -64,10 +58,8 @@ local ENEMY_LOOT_TABLE = {
 	Mythic    = { {"Legendary", 30}, {"Mythic", 55}, {"Secret", 15} },
 	Secret    = { {"Mythic", 20}, {"Secret", 80} },
 }
--- Elites (starred enemies) bump the loot table one tier up per ELITE_LOOT_TIER_BUMP
--- That logic is applied in LootService.Drop via the stars attribute.
 
--- ─── Weighted random pick from { {name, weight} } ────────────────────────────
+-- ─── Weighted random pick ─────────────────────────────────────────────────────
 local function weightedPick(tbl)
 	local total = 0
 	for _, entry in ipairs(tbl) do total += entry[2] end
@@ -80,7 +72,7 @@ local function weightedPick(tbl)
 	return tbl[#tbl][1]
 end
 
--- ─── Roll a concrete item instance from a template name ───────────────────────
+-- ─── Roll a concrete item instance ───────────────────────────────────────────
 local function rollItem(templateName: string): table?
 	local template = ItemData[templateName]
 	if not template then return nil end
@@ -97,14 +89,13 @@ local function rollItem(templateName: string): table?
 	}
 end
 
--- ─── Pick a random item template from a rarity string ─────────────────────────
 local function pickTemplate(rarityName: string): string?
 	local pool = ItemData._byRarity[rarityName]
 	if not pool or #pool == 0 then return nil end
 	return pool[math.random(1, #pool)]
 end
 
--- ─── Rarity tier index helper ─────────────────────────────────────────────────
+-- ─── Rarity tier helpers ──────────────────────────────────────────────────────
 local RARITY_ORDER = {}
 for i, r in ipairs(Config.RARITIES) do
 	RARITY_ORDER[r.name] = i
@@ -115,18 +106,17 @@ local function bumpRarity(rarityName: string, bump: number): string
 	return Config.RARITIES[idx].name
 end
 
--- ─── Rarity color lookup ──────────────────────────────────────────────────────
 local RARITY_COLOR = {}
 for _, r in ipairs(Config.RARITIES) do
 	RARITY_COLOR[r.name] = r.color
 end
 
--- ─── World drop part ──────────────────────────────────────────────────────────
-local PICKUP_RANGE  = 1          -- tiles away a player must be to auto-pickup
-local BOB_HEIGHT    = 0.6        -- studs the item bobs up/down
-local BOB_PERIOD    = 1.4        -- seconds per full bob cycle
+-- ─── World drop state ─────────────────────────────────────────────────────────
+local PICKUP_RANGE = 1
+local BOB_HEIGHT   = 0.6
+local BOB_PERIOD   = 1.4
 
-local worldDrops = {}   -- itemId → { part, item, tileX, tileZ }
+local worldDrops = {}  -- itemId → { part, item, tileX, tileZ }
 
 local lootFolder: Folder
 
@@ -146,44 +136,28 @@ local function spawnWorldDrop(item: table, worldPos: Vector3, tx: number, tz: nu
 	part.CFrame           = CFrame.new(worldPos + Vector3.new(0, 1.5, 0))
 	part.Parent           = lootFolder
 
-	-- Gentle bob tween (loops)
+	-- FIX: removed the leaked Heartbeat connection (bobConn).
+	-- The task.spawn loop is sufficient on its own.
 	local baseY = worldPos.Y + 1.5
-	local function bobUp()
-		TweenService:Create(part,
-			TweenInfo.new(BOB_PERIOD * 0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
-			{ CFrame = CFrame.new(worldPos.X, baseY + BOB_HEIGHT, worldPos.Z) }
-		):Play()
-	end
-	local function bobDown()
-		TweenService:Create(part,
-			TweenInfo.new(BOB_PERIOD * 0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
-			{ CFrame = CFrame.new(worldPos.X, baseY, worldPos.Z) }
-		):Play()
-	end
-
-	local bobConn
-	local function startBob()
+	task.spawn(function()
 		local up = true
-		bobConn = game:GetService("RunService").Heartbeat:Connect(function() end)
-		-- Use a looped task instead of Heartbeat to avoid per-frame cost
-		task.spawn(function()
-			while part and part.Parent do
-				if up then bobUp() else bobDown() end
-				up = not up
-				task.wait(BOB_PERIOD * 0.5)
-			end
-		end)
-	end
-	startBob()
+		while part and part.Parent do
+			local targetY = up and (baseY + BOB_HEIGHT) or baseY
+			TweenService:Create(part,
+				TweenInfo.new(BOB_PERIOD * 0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+				{ CFrame = CFrame.new(worldPos.X, targetY, worldPos.Z) }
+			):Play()
+			up = not up
+			task.wait(BOB_PERIOD * 0.5)
+		end
+	end)
 
-	-- Small point light for glow
-	local light            = Instance.new("PointLight")
-	light.Brightness       = 3
-	light.Range            = 8
-	light.Color            = color
-	light.Parent           = part
+	local light        = Instance.new("PointLight")
+	light.Brightness   = 3
+	light.Range        = 8
+	light.Color        = color
+	light.Parent       = part
 
-	-- BillboardGui with item name + rarity
 	local billboard           = Instance.new("BillboardGui")
 	billboard.Size            = UDim2.new(0, 130, 0, 24)
 	billboard.StudsOffset     = Vector3.new(0, 2.2, 0)
@@ -209,47 +183,60 @@ end
 local function giveItem(player: Player, item: table)
 	local inv = getInventory(player)
 	inv[item.id] = item
-	-- Serialize for client (just the flat table)
 	local serialized = {}
-	for id, it in pairs(inv) do
+	for _, it in pairs(inv) do
 		table.insert(serialized, it)
 	end
 	InventoryUpdated:FireClient(player, serialized)
 end
 
--- ─── Remove world drop ────────────────────────────────────────────────────────
+-- ─── Remove world drop (returns the drop data or nil if already gone) ─────────
 local function removeWorldDrop(itemId: string)
 	local drop = worldDrops[itemId]
-	if not drop then return end
+	if not drop then return nil end
+	-- FIX: nil the entry atomically BEFORE any yield so a second
+	-- iteration of the pickup loop cannot also claim this item.
+	worldDrops[itemId] = nil
 	if drop.part and drop.part.Parent then
 		drop.part:Destroy()
 	end
-	worldDrops[itemId] = nil
+	return drop
 end
 
 -- ─── Proximity pickup loop ────────────────────────────────────────────────────
--- Runs every 0.3 s; checks if any player is standing on a drop tile.
 local MovementService
 
 task.spawn(function()
 	while true do
 		task.wait(0.3)
 		if not MovementService then
-			local ok, svc = pcall(require, game:GetService("ServerScriptService").Services.MovementService)
+			local ok, svc = pcall(require,
+				game:GetService("ServerScriptService").Services.MovementService)
 			if ok then MovementService = svc end
 		end
 		if not MovementService then continue end
 
-		for itemId, drop in pairs(worldDrops) do
+		-- Snapshot keys so mutations mid-loop don't cause issues
+		local ids = {}
+		for itemId in pairs(worldDrops) do
+			table.insert(ids, itemId)
+		end
+
+		for _, itemId in ipairs(ids) do
+			-- FIX: re-check after snapshot; another iteration may have removed it
+			local drop = worldDrops[itemId]
+			if not drop then continue end
+
 			for _, player in ipairs(Players:GetPlayers()) do
 				local ptx, ptz = MovementService.GetPlayerTile(player)
 				if ptx then
 					local dist = math.abs(ptx - drop.tileX) + math.abs(ptz - drop.tileZ)
 					if dist <= PICKUP_RANGE then
-						-- First player to step on it gets it (no contention guard needed at 0.3s tick)
-						local item = drop.item
-						removeWorldDrop(itemId)
-						giveItem(player, item)
+						-- Atomically remove; if nil was returned, someone else got it
+						local claimed = removeWorldDrop(itemId)
+						if claimed then
+							giveItem(player, claimed.item)
+						end
 						break
 					end
 				end
@@ -265,33 +252,27 @@ function LootService.Drop(model: Model, killer: Player?)
 	local tx          = model:GetAttribute("CurrentTileX") or 1
 	local tz          = model:GetAttribute("CurrentTileZ") or 1
 
-	-- 1. Chance check
 	local dropChance = DROP_CHANCE[enemyRarity] or 0.25
 	if math.random() > dropChance then return end
 
-	-- 2. Pick item rarity, applying elite tier bump
-	local lootTable = ENEMY_LOOT_TABLE[enemyRarity] or ENEMY_LOOT_TABLE["Common"]
+	local lootTable  = ENEMY_LOOT_TABLE[enemyRarity] or ENEMY_LOOT_TABLE["Common"]
 	local itemRarity = weightedPick(lootTable)
 	if stars > 0 then
 		local bump = Config.ELITE_LOOT_TIER_BUMP[stars] or 0
 		itemRarity = bumpRarity(itemRarity, bump)
 	end
 
-	-- 3. Pick template and roll stat
 	local templateName = pickTemplate(itemRarity)
 	if not templateName then return end
 	local item = rollItem(templateName)
 	if not item then return end
 
-	-- 4. Spawn world drop
 	local worldPos = Vector3.new(
 		(tx - 0.5) * Config.TILE_SIZE,
 		Config.TILE_HEIGHT + 0.5,
 		(tz - 0.5) * Config.TILE_SIZE
 	)
 	spawnWorldDrop(item, worldPos, tx, tz)
-
-	-- 5. Notify all clients (for any future beacon/minimap features)
 	ItemDropped:FireAllClients(item, worldPos)
 end
 
@@ -309,7 +290,6 @@ end
 Players.PlayerAdded:Connect(function(player)
 	inventories[player.UserId] = {}
 end)
-
 Players.PlayerRemoving:Connect(function(player)
 	inventories[player.UserId] = nil
 end)
@@ -328,8 +308,8 @@ do
 	local map = workspace:WaitForChild("Map", 30)
 	lootFolder = map:FindFirstChild("Loot")
 	if not lootFolder then
-		lootFolder      = Instance.new("Folder")
-		lootFolder.Name = "Loot"
+		lootFolder        = Instance.new("Folder")
+		lootFolder.Name   = "Loot"
 		lootFolder.Parent = map
 	end
 	print("[LootService] Ready.")

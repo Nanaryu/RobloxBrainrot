@@ -2,7 +2,6 @@
 -- Fully server-driven auto-attack.
 -- Every AUTO_ATTACK_INTERVAL the server checks each player for cardinal-adjacent
 -- (manhattan == 1) enemies and splits the player's damage evenly among them.
--- No client click required — attacking starts automatically when the player spawns.
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,9 +9,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config  = require(ReplicatedStorage.Modules.Config)
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
--- ─── Remotes ──────────────────────────────────────────────────────────────────
--- AttackResult  → tells the client "a hit happened this tick" (for sound / VFX)
--- TakeDamage    → already used elsewhere to flash the player's screen
 local AttackResult = Remotes:WaitForChild("AttackResult")
 
 -- ─── Lazy service references ──────────────────────────────────────────────────
@@ -34,8 +30,6 @@ local function getSkillService()
 end
 
 -- ─── Per-player loop state ────────────────────────────────────────────────────
--- loopActive[userId] = true while the attack loop coroutine is running.
--- Setting it to false is the only signal needed to stop the loop.
 local loopActive: { [number]: boolean } = {}
 
 -- ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -45,12 +39,9 @@ local function isPlayerAlive(player: Player): boolean
 	return humanoid ~= nil and humanoid.Health > 0
 end
 
--- Returns a list of every living enemy model whose tile is exactly one cardinal
--- step away from (ptx, ptz).
 local function getAdjacentEnemies(ptx: number, ptz: number): { Model }
-	local es = getEnemyService()
-	local map     = workspace:FindFirstChild("Map")
-	local folder  = map and map:FindFirstChild("Enemies")
+	local map    = workspace:FindFirstChild("Map")
+	local folder = map and map:FindFirstChild("Enemies")
 	if not folder then return {} end
 
 	local adjacent = {}
@@ -60,7 +51,7 @@ local function getAdjacentEnemies(ptx: number, ptz: number): { Model }
 			local etz = model:GetAttribute("CurrentTileZ")
 			if etx and etz then
 				local dist = math.abs(ptx - etx) + math.abs(ptz - etz)
-				if dist == 1 then
+				if dist == Config.AUTO_ATTACK_RANGE then
 					table.insert(adjacent, model)
 				end
 			end
@@ -83,24 +74,21 @@ local function doAttackTick(player: Player)
 	local targets = getAdjacentEnemies(ptx, ptz)
 	if #targets == 0 then return end
 
-	-- Base damage (with ±10 % variance), then divided equally among targets
+	-- Base damage (with ±10 % variance) divided equally among targets
 	local baseDamage = 10 + ss.GetAttackBonus(player)
 	local rolled     = math.random(math.floor(baseDamage * 0.9), math.ceil(baseDamage * 1.1))
 	local share      = math.max(1, math.floor(rolled / #targets))
 
-	local anyHit = false
 	for _, model in ipairs(targets) do
 		local enemyId = model:GetAttribute("EnemyId")
 		if enemyId and model:GetAttribute("State") ~= "dead" then
 			es.DamageEnemy(enemyId, share, player)
 			ss.GrantAttackXP(player, 2)
-			anyHit = true
-		end
-	end
 
-	-- Notify client that hits landed this tick (for sound / VFX)
-	if anyHit then
-		AttackResult:FireClient(player, true)
+			-- FIX: pass damage and enemyId so DamageNumbers.client.lua can
+			-- spawn a floating number above the correct enemy model.
+			AttackResult:FireClient(player, true, share, enemyId)
+		end
 	end
 end
 
@@ -114,7 +102,6 @@ local function startLoop(player: Player)
 
 	task.spawn(function()
 		while loopActive[userId] do
-			-- Respect the global attack interval, accounting for time already elapsed
 			local now  = tick()
 			local last = lastAttack[userId] or 0
 			local wait = Config.AUTO_ATTACK_INTERVAL - (now - last)
@@ -135,12 +122,10 @@ end
 -- ─── Player lifecycle ─────────────────────────────────────────────────────────
 local function setupPlayer(player: Player)
 	player.CharacterAdded:Connect(function(character)
-		-- Reset loop so it can restart cleanly on respawn
 		stopLoop(player)
 
 		local humanoid = character:WaitForChild("Humanoid", 10)
 		if humanoid then
-			-- Wait a frame for the character to be fully placed before attacking
 			task.wait(0.2)
 			if humanoid.Health > 0 then
 				startLoop(player)
@@ -159,8 +144,8 @@ for _, player in ipairs(Players:GetPlayers()) do
 end
 
 Players.PlayerRemoving:Connect(function(player: Player)
-	loopActive[player.UserId]  = false
-	lastAttack[player.UserId]  = nil
+	loopActive[player.UserId] = false
+	lastAttack[player.UserId] = nil
 end)
 
 -- ─── Ensure remotes exist ─────────────────────────────────────────────────────
@@ -172,11 +157,9 @@ local function ensureRemote(name: string, isFunction: boolean)
 		r.Parent = folder
 	end
 end
-ensureRemote("AttackResult", false)
--- RequestAttack and StopAttack are no longer fired by the client,
--- but keep them if other systems still reference them.
+ensureRemote("AttackResult",  false)
 ensureRemote("RequestAttack", false)
 ensureRemote("StopAttack",    false)
 
-print("[CombatService] Ready — server-driven AoE auto-attack active.")
+print("[CombatService] Ready — server-driven auto-attack active.")
 return {}
