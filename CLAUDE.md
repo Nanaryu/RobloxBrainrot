@@ -97,6 +97,7 @@ StarterGui/
 | AUTO_ATTACK_RANGE | 1 tile | Manhattan == 1 |
 | AUTO_ATTACK_INTERVAL | 1.0 s | |
 | ENEMY_ATTACK_INTERVAL | 1.5 s | |
+| BASE_ATK | 10 | Player base weapon attack (scales with equipment later) |
 | CAM_VERTICAL_ANGLE | 56 | Higher = more top-down, better click balance |
 | ELITE_SPAWN_CHANCE | 5 % | |
 | ELITE_STAR_MAX | 5 | |
@@ -169,13 +170,13 @@ StarterGui/
 
 ### ✅ Combat (CombatService + CombatController)
 - **Click-to-attack**: click enemy → `RequestAttack(enemyId)` → yellow SelectionBox → auto-attack loop
-- Escape key → `StopAttack` → deselect; target dies / out of range / player moves → deselect
-- Server: per-player auto-attack loop at `AUTO_ATTACK_INTERVAL`; single target only
-- **Damage formula** (PENDING): `(ATK_Level × BASE_ATK) / 20` to `/10`, minus enemy_DEF
-- **Defense formula** (PENDING): `max(1, enemy_damage - DEF_Level)` — flat subtraction
+- Escape key → `StopAttack` → deselect; target dies / out of range → deselect
+- Server: per-player auto-attack loop at `AUTO_ATTACK_INTERVAL`; single target only via `attackTarget[userId]`
+- **Damage formula** (IMPLEMENTED): `min_raw = (ATK_Level × BASE_ATK) / 20`, `max_raw = (ATK_Level × BASE_ATK) / 10`, accuracy check, roll `random(min_raw, max_raw) - enemy_DEF`
+- **Defense formula** (IMPLEMENTED): `max(1, enemy_damage - DEF_Level)` — flat subtraction, no cap
 - If accuracy = 0 (max_raw ≤ enemy_DEF): deal 0 — hard progression gate
 - No damage split — Rucoy-style 1v1 targeting
-- Grants ATK stat XP per hit; DEF stat XP granted in EnemyService._DamagePlayer
+- Grants ATK stat XP (1 tick per hit); DEF stat XP granted in EnemyService._DamagePlayer
 - Equipment stat not yet factored in (pending inventory/equip system)
 - Dead players blocked from movement and combat (client + server)
 
@@ -185,8 +186,8 @@ StarterGui/
   - Character Level XP: `xp_for_level(n) = floor(n ^ (n/1000 + 3))` — granted per enemy kill via `enemy.xp`
   - Stat XP (ATK/DEF): `stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.373))` for 0-54, `floor(n ^ (n/1000 + 2.171))` for 55-99 — 1 tick per hit (ATK) or per damage taken (DEF)
 - `GrantAttackXP(player, amount)` / `GrantDefenseXP(player, amount)` — no debounce, each enemy hit grants independently
-- `GetAttackBonus(player)` → `(level-1) * 0.5` flat ATK (PENDING: will use new formula)
-- `GetDefenseReduction(player)` → `level / (level + 80)`, capped at 0.75 (PENDING: will use flat subtraction)
+- `GetAttackLevel(player)` → ATK stat level (used by CombatService damage formula)
+- `GetDefenseLevel(player)` → DEF stat level (used by EnemyService defense formula: `max(1, raw - defLevel)`)
 - Fires `SkillUpdated` after every grant with full payload for both skills
 - Persisted to `"Skills_v1"` DataStore (saved on PlayerRemoving + BindToClose)
 
@@ -311,6 +312,11 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [x] Safe zone (Brainrot Town — 12 tile radius, no enemies)
 - [x] Enemy leash system (return-to-spawn after exceeding leash range)
 - [x] Click-to-move distance cap (25 tiles)
+- [x] Rucoy-style damage formula (multiplicative ATK × baseATK, flat DEF subtraction)
+- [x] Click-to-attack enemy selection (RequestAttack/StopAttack flow)
+- [x] Dual XP system (character level from kills + stat XP from using skills)
+- [x] Enemy speed nerf (reduced by 2-3 across all tiers)
+- [x] Enemy defense stat (all enemies now have defense values)
 - [ ] Item equip system + player stat scaling
 - [ ] Item reroll UI
 - [ ] Full DataStore persistence (inventory, equipment)
@@ -318,10 +324,6 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [ ] Offline player shops
 - [ ] Full death/respawn flow polish
 - [ ] Game name
-- [ ] Rucoy-style damage formula (multiplicative ATK × baseATK, flat DEF subtraction)
-- [ ] Click-to-attack enemy selection (restore RequestAttack/StopAttack flow)
-- [ ] Dual XP system (character level from kills + stat XP from using skills)
-- [ ] Enemy speed nerf (reduce by 2-3 across all tiers)
 
 ---
 
@@ -337,14 +339,16 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 ## 🔑 Key Implementation Notes
 - **Kill tracking ownership**: KillTrackerService is sole owner of kill counts. Leaderboard.server.lua does NOT write `Kills.Value` in `refreshDisplay` or save it in `PlayerRemoving`. KillTracker sets `leaderstats.Kills.Value` via `WaitForChild` after load to win the race condition.
 - **DataStores in use**: `"Stats"` (Level, Coins via Leaderboard), `"KillTracker_v1"` (kills via KillTrackerService), `"Skills_v1"` (Attack/Defense XP via SkillService), `"Inventory_v1"` (inventory via LootService) — all saved on PlayerRemoving + BindToClose only (batched, no per-kill writes)
-- Enemy defense reduction: `level / (level + 80)` capped at 0.75
-- Attack bonus: `(level-1) * 0.5` flat, added before ±10% roll
+- Enemy defense reduction: flat subtraction — `max(1, enemy_damage - DEF_Level)`
+- Attack bonus: `GetAttackLevel(player)` → ATK stat level; baseATK = `Config.BASE_ATK` (10)
+- Damage: `(ATK_Level × BASE_ATK) / 20` to `/10`, accuracy check vs enemy defense, roll minus defense
 - Attack XP: 1 per enemy hit (CombatService); Defense XP: 1 per hit taken (EnemyService._DamagePlayer)
 - `SkillUpdated` fires after every XP grant + on CharacterAdded (0.5s delay) for HUD init
 - Loot drop chain: `EnemyService._Kill` → `KillTrackerService.RegisterKill` + `LootService.Drop` → world Part → pickup loop → `InventoryUpdated`
 - `ItemData._byRarity[rarityName]` pre-built array for fast random picks
 - Inventory slot template children must be named `ItemIcon` (ImageLabel) and `ItemLabel` (TextLabel)
 - Main.server.lua boot order: TileGrid → Movement → Skills → Enemy → KillTracker → Loot → Combat
+- **Unified movement sequence**: All movement (click-to-move via `playerMoveSeq`, walk-to-enemy via `CancelMovement`, death, StopAttack) uses ONE counter in MovementService. `walkToEnemy` calls `CancelMovement` which increments `playerMoveSeq`, invalidating both click-to-move and previous walk-to-enemy delayed tasks. This prevents `playerTiles` corruption from concurrent movement systems.
 
 ---
 

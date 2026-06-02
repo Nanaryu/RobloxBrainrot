@@ -1,5 +1,6 @@
 -- ServerScriptService/Services/EnemyService.lua
 -- Manages all enemy lifecycle: spawn, wander, chase player, attack, die, drop loot.
+-- Defense formula (Rucoy): final_damage = max(1, enemy_damage - DEF_Level)
 
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
@@ -66,12 +67,10 @@ local function isPassable(tx, tz)
 		and not isTileOccupied(tx, tz)
 		and not isPlayerTileOccupied(tx, tz)
 end
--- FIX: wander/chase pathfinding uses this variant so the enemy's own
--- current tile is not treated as blocked (it owns that tile).
+-- Enemies cannot path into safe zones (town)
 local function isPassableForEnemy(tx, tz, id)
 	if not TileGrid.IsWalkable(tx, tz) then return false end
 	if isPlayerTileOccupied(tx, tz) then return false end
-	-- Enemies cannot enter safe zones (town)
 	local zone = TileGrid.GetZone(tx, tz)
 	if zone == "Town" then return false end
 	local occupant = occupiedTiles[tx .. "_" .. tz]
@@ -81,6 +80,12 @@ end
 -- ─── Tween config ─────────────────────────────────────────────────────────────
 local MOVE_TWEEN = TweenInfo.new(Config.MOVE_TWEEN_TIME, Enum.EasingStyle.Linear)
 local TURN_TWEEN = TweenInfo.new(Config.MOVE_TWEEN_TIME * 0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+-- Tier-based enemy movement speed (lower = faster)
+local function getEnemyTweenTime(tier: number): number
+	local t = math.clamp(tier or 1, 1, 8)
+	return Config.ENEMY_SPEED_BASE + (Config.ENEMY_SPEED_MIN - Config.ENEMY_SPEED_BASE) * ((t - 1) / 7)
+end
 
 -- ─── Unique ID generator ──────────────────────────────────────────────────────
 local nextId = 0
@@ -106,17 +111,14 @@ end
 
 local function groundModelOnTile(model: Model, tx: number, tz: number)
 	local baseCF = CFrame.new(tileToWorld(tx, tz))
-	model:PivotTo(baseCF)
 	local boundsCF, boundsSize = model:GetBoundingBox()
-	local bottomY  = boundsCF.Position.Y - boundsSize.Y * 0.5
-	local tileTopY = Config.TILE_HEIGHT
-	local groundedCF = baseCF + Vector3.new(0, tileTopY - bottomY, 0)
+	local halfH = boundsSize.Y * 0.5
+	local groundedCF = baseCF + Vector3.new(0, halfH, 0)
 	model:PivotTo(groundedCF)
-	model:SetAttribute("PivotYOffset", model:GetPivot().Position.Y - tileToWorld(tx, tz).Y)
 end
 
 local function getTilePivotPosition(model: Model, tx: number, tz: number): Vector3
-	return tileToWorld(tx, tz) + Vector3.new(0, model:GetAttribute("PivotYOffset") or 0, 0)
+	return tileToWorld(tx, tz)
 end
 
 local function tweenModelPivot(model: Model, targetCF: CFrame, tweenInfo: TweenInfo)
@@ -161,14 +163,36 @@ local function moveEnemyToTile(model, tx, tz)
 	else
 		targetCF = CFrame.new(targetPos)
 	end
-	tweenModelPivot(model, targetCF, MOVE_TWEEN)
+
+	-- Use tier-based speed
+	local tier = model:GetAttribute("Tier") or 1
+	local tweenTime = getEnemyTweenTime(tier)
+	local enemyTween = TweenInfo.new(tweenTime, Enum.EasingStyle.Linear)
+	tweenModelPivot(model, targetCF, enemyTween)
 
 	model:SetAttribute("CurrentTileX", tx)
 	model:SetAttribute("CurrentTileZ", tz)
-	-- FIX: always clear MovingTo after the tween completes so _Kill
-	-- does not try to double-release a tile that is already released.
 	model:SetAttribute("MovingToTileX", nil)
 	model:SetAttribute("MovingToTileZ", nil)
+end
+
+-- ─── Invisible hitbox for easier clicking ─────────────────────────────────────
+local function buildHitbox(model: Model)
+	local hrp = model.PrimaryPart
+	if not hrp then return end
+	local hitbox = Instance.new("Part")
+	hitbox.Name = "Hitbox"
+	hitbox.Size = Vector3.new(Config.TILE_SIZE * 1.2, Config.TILE_SIZE * 1.8, Config.TILE_SIZE * 1.2)
+	hitbox.Anchored = false
+	hitbox.CanCollide = false
+	hitbox.CanQuery = true
+	hitbox.Transparency = 1
+	hitbox.Massless = true
+	hitbox.Parent = model
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = hrp
+	weld.Part1 = hitbox
+	weld.Parent = hitbox
 end
 
 -- ─── Overhead BillboardGui ────────────────────────────────────────────────────
@@ -249,6 +273,7 @@ function EnemyService.Spawn(spawnDef: {
 	tz:          number,
 	wanderRange: number?,
 	aggroRange:  number?,
+	leashRange:  number?,
 	forceStars:  number?,
 })
 	local data = EnemyData[spawnDef.name]
@@ -312,7 +337,9 @@ function EnemyService.Spawn(spawnDef: {
 	model:SetAttribute("MaxHP",        maxHP)
 	model:SetAttribute("CurrentHP",    maxHP)
 	model:SetAttribute("Damage",       dmg)
+	model:SetAttribute("Defense",      data.defense or 0)
 	model:SetAttribute("Speed",        data.speed)
+	model:SetAttribute("Tier",         data.tier)
 	model:SetAttribute("SpawnTileX",   spawnDef.tx)
 	model:SetAttribute("SpawnTileZ",   spawnDef.tz)
 	model:SetAttribute("WanderRange",  spawnDef.wanderRange or 6)
@@ -326,6 +353,7 @@ function EnemyService.Spawn(spawnDef: {
 	enemies[id]  = model
 	occupyTile(spawnDef.tx, spawnDef.tz, id)
 
+	buildHitbox(model)
 	buildOverheadGui(model, spawnDef.name, data.lootRarity, stars)
 	EnemyService.RefreshHPBar(model)
 
@@ -371,8 +399,6 @@ local function pickWanderTarget(model: Model, id: string): (number, number)
 		local dz = math.random(-range, range)
 		local tx = math.clamp(sx + dx, 1, Config.GRID_WIDTH)
 		local tz = math.clamp(sz + dz, 1, Config.GRID_HEIGHT)
-		-- FIX: use self-aware passable check so the enemy's own tile
-		-- is always considered walkable (avoids immediate nil path).
 		if isPassableForEnemy(tx, tz, id) then return tx, tz end
 	end
 	return sx, sz
@@ -385,7 +411,6 @@ function EnemyService._AILoop(id: string)
 	local WANDER_PAUSE_MIN = 2.0
 	local WANDER_PAUSE_MAX = 4.0
 	local CHASE_TICK       = 0.05
-	local ATTACK_CHECK     = 0.3  -- seconds between attack/check; unused directly below
 
 	while true do
 		local model = enemies[id]
@@ -398,17 +423,22 @@ function EnemyService._AILoop(id: string)
 
 		local targetPlayer, ptx, ptz, dist = getClosestPlayerTile(cx, cz)
 
-		-- FIX: replaced all task.wait(0)+continue patterns with
-		-- if/elseif so the scheduler isn't yielded on every state change.
+		-- Distance culling: skip AI if no player is within render distance
+		if not targetPlayer or dist * Config.TILE_SIZE > Config.ENEMY_RENDER_DISTANCE then
+			if state ~= "wander" and state ~= "dead" then
+				model:SetAttribute("State", "wander")
+			end
+			task.wait(2)
+			continue
+		end
+
 		if state == "dead" then
 			break
 
 		elseif state == "wander" then
 			if targetPlayer and dist <= aggroRange then
 				model:SetAttribute("State", "chase")
-				-- No wait — loop immediately with new state
 			else
-				-- FIX: pass id so wander finder uses self-aware passable
 				local wx, wz = pickWanderTarget(model, id)
 				local function isPassableW(tx, tz)
 					return isPassableForEnemy(tx, tz, id)
@@ -439,7 +469,6 @@ function EnemyService._AILoop(id: string)
 			local m = enemies[id]
 			if not m or not m.Parent then break end
 
-			-- Leash: if too far from spawn, drop aggro and return
 			local sx = m:GetAttribute("SpawnTileX")
 			local sz = m:GetAttribute("SpawnTileZ")
 			local leashRange = m:GetAttribute("LeashRange") or 15
@@ -447,10 +476,8 @@ function EnemyService._AILoop(id: string)
 				m:SetAttribute("State", "return")
 			elseif not targetPlayer or dist > aggroRange * 1.5 then
 				m:SetAttribute("State", "wander")
-				-- No wait — loop immediately
 			elseif dist == 1 then
 				m:SetAttribute("State", "attack")
-				-- No wait — loop immediately
 			else
 				local cx2 = m:GetAttribute("CurrentTileX")
 				local cz2 = m:GetAttribute("CurrentTileZ")
@@ -484,7 +511,6 @@ function EnemyService._AILoop(id: string)
 			local m = enemies[id]
 			if not m or not m.Parent then break end
 
-			-- Leash: if too far from spawn, drop aggro and return
 			local sx = m:GetAttribute("SpawnTileX")
 			local sz = m:GetAttribute("SpawnTileZ")
 			local leashRange = m:GetAttribute("LeashRange") or 15
@@ -492,7 +518,6 @@ function EnemyService._AILoop(id: string)
 				m:SetAttribute("State", "return")
 			elseif not targetPlayer then
 				m:SetAttribute("State", "wander")
-				-- No wait — loop immediately
 			else
 				local cx2 = m:GetAttribute("CurrentTileX")
 				local cz2 = m:GetAttribute("CurrentTileZ")
@@ -500,7 +525,6 @@ function EnemyService._AILoop(id: string)
 
 				if dist2 ~= 1 then
 					m:SetAttribute("State", "chase")
-					-- No wait — loop immediately
 				else
 					if m.PrimaryPart then
 						local playerWorldPos = tileToWorld(ptx2, ptz2)
@@ -537,14 +561,14 @@ function EnemyService._AILoop(id: string)
 			end
 
 		else
-			-- Unknown state: reset to wander
 			model:SetAttribute("State", "wander")
 			task.wait(1)
 		end
 	end
 end
 
--- ─── Damage player ────────────────────────────────────────────────────────────
+-- ─── Damage player (Rucoy defense formula) ────────────────────────────────────
+-- final_damage = max(1, enemy_damage - DEF_Level)
 function EnemyService._DamagePlayer(player: Player, amount: number, sourceId: string)
 	local char = player.Character
 	if not char then return end
@@ -555,12 +579,12 @@ function EnemyService._DamagePlayer(player: Player, amount: number, sourceId: st
 		SkillService = require(script.Parent.SkillService)
 	end
 
-	local reduction   = SkillService.GetDefenseReduction(player)
-	local finalDamage = math.max(1, math.floor(amount * (1 - reduction)))
+	local defLevel    = SkillService.GetDefenseLevel(player)
+	local finalDamage = math.max(1, amount - defLevel)
 
 	humanoid:TakeDamage(finalDamage)
 	TakeDamage:FireClient(player, player.UserId, finalDamage)
-	SkillService.GrantDefenseXP(player, 1)
+	SkillService.GrantDefenseXP(player, 1) -- 1 tick per hit taken
 end
 
 -- ─── Receive damage from CombatService ────────────────────────────────────────
@@ -587,8 +611,7 @@ function EnemyService.DamageEnemy(id: string, amount: number, attacker: Player)
 end
 
 -- ─── Respawn tracking ─────────────────────────────────────────────────────────
--- Each killed enemy queues a respawn in its zone after a delay.
-local RESPAWN_DELAY_MIN = 8   -- seconds
+local RESPAWN_DELAY_MIN = 8
 local RESPAWN_DELAY_MAX = 15
 
 local function queueRespawn(zoneId: string)
@@ -597,7 +620,6 @@ local function queueRespawn(zoneId: string)
 		local zone = ZoneData.GetZone(zoneId)
 		if not zone or zone.safe then return end
 
-		-- Pick a random walkable tile in the zone
 		local ZoneService = require(script.Parent.ZoneService)
 		local tx, tz = ZoneService.GetRandomTileInZone(zoneId)
 		if tx and tz and not isTileOccupied(tx, tz) and not isPlayerTileOccupied(tx, tz) then
@@ -641,7 +663,17 @@ function EnemyService._Kill(id: string, killer: Player?)
 	local KillTracker = require(script.Parent.KillTrackerService)
 	KillTracker.RegisterKill(killer, model:GetAttribute("EnemyName"))
 
-	-- Queue a respawn in this enemy's zone
+	-- Grant character level XP from enemy
+	if killer and killer.Parent then
+		local charData = killer:FindFirstChild("leaderstats")
+		if charData and charData:FindFirstChild("Level") then
+			local data = EnemyData[model:GetAttribute("EnemyName")]
+			if data then
+				charData.Level.Value = charData.Level.Value + data.xp
+			end
+		end
+	end
+
 	local zoneId = TileGrid.GetZone(dtx, dtz)
 	if zoneId then
 		queueRespawn(zoneId)
@@ -705,7 +737,7 @@ do
 
 	-- Zone-based spawning: fill each non-safe zone with enemies
 	task.defer(function()
-		task.wait(3) -- wait for TileGrid to finish generating
+		task.wait(3)
 
 		local spawnX = Config.GRID_WIDTH  / 2
 		local spawnZ = Config.GRID_HEIGHT / 2
@@ -713,7 +745,6 @@ do
 		for _, zone in ipairs(ZoneData.ZONES) do
 			if not zone.safe and #zone.spawnEnemies > 0 then
 				local spawnPool = ZoneData.BuildSpawnPool(zone)
-				-- Count walkable tiles in this zone to determine density
 				local walkableCount = 0
 				local zoneCx = spawnX + zone.center.x
 				local zoneCz = spawnZ + zone.center.z
@@ -733,7 +764,6 @@ do
 
 				for _ = 1, spawnCount do
 					local tx, tz = nil, nil
-					-- Try random positions within zone radius, fallback to scan
 					for attempt = 1, 30 do
 						local angle = math.random() * math.pi * 2
 						local r = math.random(0, math.floor(zone.radius * 0.9))
@@ -747,7 +777,6 @@ do
 							break
 						end
 					end
-					-- Fallback: full scan around zone centre
 					if not tx then
 						for scanTx = math.max(1, math.floor(zoneCx - scanR)), math.min(Config.GRID_WIDTH, math.ceil(zoneCx + scanR)) do
 							for scanTz = math.max(1, math.floor(zoneCz - scanR)), math.min(Config.GRID_HEIGHT, math.ceil(zoneCz + scanR)) do

@@ -20,20 +20,29 @@ local function orderedNeighbours(cx, cz, goalX, goalZ)
 
 	for _, off in ipairs(BASE_NEIGHBOURS) do
 		local nx, nz = cx + off[1], cz + off[2]
-		local axisNeed   = (off[1] ~= 0) and remainingX or remainingZ
-		local balanceNeed = (off[1] ~= 0) and remainingZ or remainingX
+		local h = heuristic(nx, nz, goalX, goalZ)
+		-- towardGoal: does this move reduce the dominant remaining distance?
+		local towardGoal = 0
+		if off[1] ~= 0 and remainingX > 0 then
+			-- Horizontal move: toward goal if in the right direction
+			local correctDir = (off[1] > 0) == (goalX > cx)
+			if correctDir then towardGoal = towardGoal + remainingX end
+		end
+		if off[2] ~= 0 and remainingZ > 0 then
+			-- Vertical move: toward goal if in the right direction
+			local correctDir = (off[2] > 0) == (goalZ > cz)
+			if correctDir then towardGoal = towardGoal + remainingZ end
+		end
 		table.insert(neighbours, {
 			dx = off[1], dz = off[2],
-			h  = heuristic(nx, nz, goalX, goalZ),
-			axisNeed    = axisNeed,
-			balanceNeed = balanceNeed,
+			h = h,
+			towardGoal = towardGoal,
 		})
 	end
 
 	table.sort(neighbours, function(a, b)
 		if a.h ~= b.h then return a.h < b.h end
-		if a.axisNeed ~= b.axisNeed then return a.axisNeed > b.axisNeed end
-		if a.balanceNeed ~= b.balanceNeed then return a.balanceNeed < b.balanceNeed end
+		if a.towardGoal ~= b.towardGoal then return a.towardGoal > b.towardGoal end
 		if a.dz ~= b.dz then return a.dz < b.dz end
 		return a.dx < b.dx
 	end)

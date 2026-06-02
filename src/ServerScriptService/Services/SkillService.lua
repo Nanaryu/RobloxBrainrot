@@ -1,12 +1,12 @@
 -- ServerScriptService/Services/SkillService.lua
--- Tracks Attack and Defense skill XP per player.
+-- Tracks Attack and Defense stat XP per player.
 -- Fires SkillUpdated → client whenever XP or level changes.
 --
 -- Public API (called by CombatService and EnemyService):
 --   SkillService.GrantAttackXP(player, amount)
 --   SkillService.GrantDefenseXP(player, amount)
---   SkillService.GetAttackBonus(player)   → flat ATK bonus from Attack level
---   SkillService.GetDefenseReduction(player) → damage reduction ratio (0–0.75)
+--   SkillService.GetAttackLevel(player)   → ATK stat level (for damage formula)
+--   SkillService.GetDefenseLevel(player)  → DEF stat level (for defense formula)
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,6 +22,7 @@ local SkillService = {}
 
 -- ─── Per-player skill state ───────────────────────────────────────────────────
 -- skillData[userId] = { Attack = { totalXP = 0 }, Defense = { totalXP = 0 } }
+-- totalXP = cumulative stat ticks (1 per hit / per damage taken)
 local skillData = {}
 
 local function initPlayer(player: Player)
@@ -47,8 +48,8 @@ local function fireUpdate(player: Player)
 
 	for _, skillName in ipairs({ Skills.ATTACK, Skills.DEFENSE }) do
 		local totalXP = data[skillName].totalXP
-		local level   = Skills.LevelFromXP(totalXP)
-		local curXP, neededXP = Skills.XPProgress(totalXP)
+		local level   = Skills.StatLevelFromXP(totalXP)
+		local curXP, neededXP = Skills.StatXPProgress(totalXP)
 		payload[skillName] = {
 			level     = level,
 			currentXP = curXP,
@@ -64,16 +65,16 @@ end
 local function grantXP(player: Player, skillName: string, amount: number)
 	local data    = getSkillData(player)
 	local skill   = data[skillName]
-	local oldLevel = Skills.LevelFromXP(skill.totalXP)
+	local oldLevel = Skills.StatLevelFromXP(skill.totalXP)
 
 	skill.totalXP += amount
 
 	-- Cap at max level's XP floor so totalXP doesn't grow forever at cap
-	if Skills.LevelFromXP(skill.totalXP) >= Skills.MAX_LEVEL then
-		skill.totalXP = Skills.XP_TABLE[Skills.MAX_LEVEL]
+	if Skills.StatLevelFromXP(skill.totalXP) >= Skills.MAX_LEVEL then
+		skill.totalXP = Skills.STAT_XP_TABLE[Skills.MAX_LEVEL]
 	end
 
-	local newLevel = Skills.LevelFromXP(skill.totalXP)
+	local newLevel = Skills.StatLevelFromXP(skill.totalXP)
 	if newLevel ~= oldLevel then
 		print(string.format("[SkillService] %s: %s levelled up → %d",
 			player.Name, skillName, newLevel))
@@ -91,19 +92,16 @@ function SkillService.GrantDefenseXP(player: Player, amount: number)
 	grantXP(player, Skills.DEFENSE, amount)
 end
 
--- ─── Public: Attack bonus (flat ATK added to base damage) ────────────────────
-function SkillService.GetAttackBonus(player: Player): number
-	local data  = getSkillData(player)
-	local level = Skills.LevelFromXP(data[Skills.ATTACK].totalXP)
-	return (level - 1) * 0.5
+-- ─── Public: ATK level (used by CombatService damage formula) ────────────────
+function SkillService.GetAttackLevel(player: Player): number
+	local data = getSkillData(player)
+	return Skills.StatLevelFromXP(data[Skills.ATTACK].totalXP)
 end
 
--- ─── Public: Defense reduction ──────────────────────────────────────────────
-function SkillService.GetDefenseReduction(player: Player): number
-	local data  = getSkillData(player)
-	local level = Skills.LevelFromXP(data[Skills.DEFENSE].totalXP)
-	local raw   = level / (level + 80)
-	return math.min(raw, 0.75)
+-- ─── Public: DEF level (used by EnemyService defense formula) ────────────────
+function SkillService.GetDefenseLevel(player: Player): number
+	local data = getSkillData(player)
+	return Skills.StatLevelFromXP(data[Skills.DEFENSE].totalXP)
 end
 
 -- ─── DataStore helpers ────────────────────────────────────────────────────────

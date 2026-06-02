@@ -11,11 +11,13 @@ local Remotes    = ReplicatedStorage:WaitForChild("Remotes")
 local RequestMove = Remotes:WaitForChild("RequestMove")
 local PlayerMoved = Remotes:WaitForChild("PlayerMoved")
 
-local playerTiles   = {}   -- [userId] = { tx, tz }  — tracks current server tile
-local playerMoveSeq = {}
+local MovementService = {}
+
+local playerTiles    = {} -- [userId] = { tx, tz }  — tracks current server tile
+local playerMoveSeq  = {}
+local playerDest     = {} -- [userId] = { tx, tz }  — final destination of in-progress walk
 local EnemyService
 
--- Cap path length to prevent a malicious client from triggering A* across the full grid.
 local MAX_PATH_NODES = 400
 
 local function isPlayerTileOccupied(tx, tz, exceptPlayer)
@@ -57,9 +59,23 @@ local function findPlayerPath(player, fromX, fromZ, tx, tz)
 
 	if not isPassable(tx, tz) then return nil end
 	local path = Pathfinder.FindPath(isPassable, fromX, fromZ, tx, tz, MAX_PATH_NODES)
-	-- Reject paths that exceed the cap — client requested something unreasonably far
 	if path and #path > MAX_PATH_NODES then return nil end
 	return path
+end
+
+-- Returns the effective origin for pathfinding: the destination of any
+-- in-progress walk, so the next path starts from where the player is headed.
+local function getEffectiveOrigin(player)
+	local userId = player.UserId
+	local dest = playerDest[userId]
+	if dest then
+		return dest.tx, dest.tz
+	end
+	local cur = playerTiles[userId]
+	if cur then
+		return cur.tx, cur.tz
+	end
+	return nil, nil
 end
 
 -- ─── Move handler ─────────────────────────────────────────────────────────────
@@ -67,41 +83,60 @@ RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ, request
 	if not isPlayerAlive(player) then return end
 
 	tx, tz = math.floor(tx or 0), math.floor(tz or 0)
-	local cur = playerTiles[player.UserId]
+	local userId = player.UserId
+	local cur = playerTiles[userId]
 	if not cur then return end
 
-	playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
-	local seq = playerMoveSeq[player.UserId]
+	playerMoveSeq[userId] = (playerMoveSeq[userId] or 0) + 1
+	local seq = playerMoveSeq[userId]
 
-	-- Trust the client's reported origin if it's close to our tracked tile.
-	-- This prevents rubber-banding when the client is mid-step.
-	fromX = math.floor(fromX or cur.tx)
-	fromZ = math.floor(fromZ or cur.tz)
-	-- Clamp: don't let the client teleport the origin far away.
-	local originDrift = math.abs(fromX - cur.tx) + math.abs(fromZ - cur.tz)
-	if originDrift > 3 then
-		fromX = cur.tx
-		fromZ = cur.tz
+	-- Use client-reported origin if close to our tracked tile, otherwise
+	-- use the effective origin (destination of any in-progress walk).
+	local clientFromX = math.floor(fromX or cur.tx)
+	local clientFromZ = math.floor(fromZ or cur.tz)
+	local originDrift = math.abs(clientFromX - cur.tx) + math.abs(clientFromZ - cur.tz)
+
+	local fromTileX, fromTileZ
+	if originDrift <= 3 then
+		-- Client origin is plausible — use it
+		fromTileX, fromTileZ = clientFromX, clientFromZ
+	else
+		-- Client origin drifted too far — use effective origin
+		local effX, effZ = getEffectiveOrigin(player)
+		fromTileX = effX or cur.tx
+		fromTileZ = effZ or cur.tz
 	end
 
-	local path = findPlayerPath(player, fromX, fromZ, tx, tz)
+	local path = findPlayerPath(player, fromTileX, fromTileZ, tx, tz)
 	if not path or #path == 0 then return end
 
 	-- Broadcast the approved path to all clients.
 	PlayerMoved:FireAllClients(player.UserId, tx, tz, path, requestId)
 
-	-- Update the server's tile record step by step, matching the client's visual pace.
-	-- Step 0 (immediate): move to first tile right away so combat range is accurate.
-	playerTiles[player.UserId] = { tx = path[1][1], tz = path[1][2] }
+	-- Track the final destination so the next pathfind starts from there.
+	playerDest[userId] = { tx = tx, tz = tz }
 
+	-- Immediately update to first step (validated by pathfinding, always safe).
+	-- This ensures subsequent pathfinds use the correct origin.
+	playerTiles[userId] = { tx = path[1][1], tz = path[1][2] }
+
+	-- Remaining steps update with animation delay.
+	local speed = MovementService.GetPlayerSpeed(player)
 	for stepIndex = 2, #path do
 		local step = path[stepIndex]
-		task.delay((stepIndex - 1) * Config.MOVE_TWEEN_TIME, function()
-			if playerMoveSeq[player.UserId] == seq then
-				playerTiles[player.UserId] = { tx = step[1], tz = step[2] }
+		task.delay((stepIndex - 1) * speed, function()
+			if playerMoveSeq[userId] == seq then
+				playerTiles[userId] = { tx = step[1], tz = step[2] }
 			end
 		end)
 	end
+
+	-- Clear destination after walk completes
+	task.delay(#path * speed + 0.05, function()
+		if playerMoveSeq[userId] == seq then
+			playerDest[userId] = nil
+		end
+	end)
 end)
 
 -- ─── Spawn ────────────────────────────────────────────────────────────────────
@@ -113,6 +148,7 @@ Players.PlayerAdded:Connect(function(player)
 		local spawnTx, spawnTz = TileGrid.GetSpawnTile()
 		playerTiles[player.UserId]   = { tx = spawnTx, tz = spawnTz }
 		playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
+		playerDest[player.UserId]    = nil
 
 		local hrp      = character:WaitForChild("HumanoidRootPart", 10)
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -124,6 +160,7 @@ Players.PlayerAdded:Connect(function(player)
 			humanoid.PlatformStand = false
 			humanoid.Died:Connect(function()
 				playerMoveSeq[player.UserId] = (playerMoveSeq[player.UserId] or 0) + 1
+				playerDest[player.UserId] = nil
 			end)
 		end
 		if hrp then
@@ -133,9 +170,6 @@ Players.PlayerAdded:Connect(function(player)
 		end
 
 		task.wait(0.2)
-		-- FIX: pass nil path and sentinel requestId = 0 so the client can
-		-- unambiguously detect this as a spawn snap and not a normal path update,
-		-- even if PlayerMoved fires before setupCharacter sets spawned = false.
 		PlayerMoved:FireClient(player, player.UserId, spawnTx, spawnTz, nil, 0)
 	end)
 end)
@@ -143,19 +177,61 @@ end)
 Players.PlayerRemoving:Connect(function(player)
 	playerTiles[player.UserId]   = nil
 	playerMoveSeq[player.UserId] = nil
+	playerDest[player.UserId]    = nil
 end)
 
 -- ─── Public API ───────────────────────────────────────────────────────────────
-local MovementService = {}
-
 function MovementService.GetPlayerTile(player)
 	local t = playerTiles[player.UserId]
 	if t then return t.tx, t.tz end
 	return nil, nil
 end
 
+-- Returns the effective position for pathfinding: destination of any
+-- in-progress walk, so the next path starts from where the player is headed.
+function MovementService.GetEffectiveTile(player)
+	local userId = player.UserId
+	local dest = playerDest[userId]
+	if dest then return dest.tx, dest.tz end
+	local t = playerTiles[userId]
+	if t then return t.tx, t.tz end
+	return nil, nil
+end
+
 function MovementService.IsPlayerTileOccupied(tx, tz, exceptPlayer)
 	return isPlayerTileOccupied(tx, tz, exceptPlayer)
+end
+
+function MovementService.GetPlayerSpeed(player): number
+	local char = player.Character
+	local ls = char and char:FindFirstChild("leaderstats")
+	local level = ls and ls:FindFirstChild("Level") and ls.Level.Value or 1
+	local t = math.clamp(level / Config.PLAYER_SPEED_LEVEL, 0, 1)
+	return Config.PLAYER_SPEED_BASE + (Config.PLAYER_SPEED_MIN - Config.PLAYER_SPEED_BASE) * t
+end
+
+function MovementService.SetPlayerTile(player, tx, tz)
+	playerTiles[player.UserId] = { tx = tx, tz = tz }
+end
+
+-- Cancel any in-progress movement and increment sequence.
+-- Used by CombatService to ensure walk-to-enemy and normal movement
+-- don't interfere with each other.
+function MovementService.CancelMovement(player: Player)
+	local userId = player.UserId
+	playerMoveSeq[userId] = (playerMoveSeq[userId] or 0) + 1
+	playerDest[userId] = nil
+	return playerMoveSeq[userId]
+end
+
+-- Get the current move sequence (for checking if a walk is still valid).
+function MovementService.GetMoveSeq(player: Player): number
+	return playerMoveSeq[player.UserId] or 0
+end
+
+function MovementService.GetPathDuration(player, pathLength: number): number
+	local speed = MovementService.GetPlayerSpeed(player)
+	return pathLength * speed
 end
 
 print("[MovementService] Ready.")

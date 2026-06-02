@@ -1,51 +1,80 @@
 -- ReplicatedStorage/Modules/Skills.lua
 -- Shared constants for the skill system.
 -- Required by both server (SkillService) and client (HUDController).
+--
+-- Two independent XP tracks:
+--   1. Character Level XP: granted per enemy kill (enemy.xp value)
+--   2. Stat XP (ATK/DEF): 1 tick per hit (ATK) or per damage taken (DEF)
+--
+-- XP curves sourced from Rucoy Online (damage_formulas/formulas.js).
 
 local Skills = {}
 
 Skills.ATTACK  = "Attack"
 Skills.DEFENSE = "Defense"
+Skills.MAX_LEVEL = 99
 
--- XP needed to reach each level (index = level, value = total XP needed from level 1).
--- Level 1 → 2 costs 100 XP, 2 → 3 costs 150, scaling by ×1.35 each tier.
--- Cap at level 99.
-local BASE_XP   = 100
-local XP_SCALE  = 1.35
-local MAX_LEVEL = 99
-
-Skills.MAX_LEVEL = MAX_LEVEL
-
--- Pre-build cumulative XP table: XP_TABLE[level] = total XP needed to BE that level.
--- XP_TABLE[1] = 0 (you start at level 1 with 0 XP spent).
-local XP_TABLE = { 0 }
-for lvl = 2, MAX_LEVEL do
-	XP_TABLE[lvl] = math.floor(XP_TABLE[lvl - 1] + BASE_XP * (XP_SCALE ^ (lvl - 2)))
+-- ─── Character Level XP (grind rate) ─────────────────────────────────────────
+-- xp_for_level(n) = floor(n ^ (n/1000 + 3))
+-- XP_TABLE[level] = cumulative XP needed to reach that level.
+-- XP_TABLE[1] = 0 (start at level 1 with 0 XP).
+local XP_TABLE = { [1] = 0 }
+for lvl = 2, Skills.MAX_LEVEL do
+	XP_TABLE[lvl] = math.floor(lvl ^ (lvl / 1000 + 3))
 end
 Skills.XP_TABLE = XP_TABLE
 
--- Returns the level corresponding to a total accumulated XP value.
+-- Returns the character level for a given cumulative XP value.
 function Skills.LevelFromXP(totalXP: number): number
-	local level = 1
-	for lvl = MAX_LEVEL, 2, -1 do
+	for lvl = Skills.MAX_LEVEL, 2, -1 do
 		if totalXP >= XP_TABLE[lvl] then
-			level = lvl
-			break
+			return lvl
 		end
 	end
-	return level
+	return 1
 end
 
--- Returns how much XP the player currently has within their current level,
--- and how much is needed to reach the next level.
+-- Returns current XP within level, and XP needed for next level.
 function Skills.XPProgress(totalXP: number): (number, number)
 	local level = Skills.LevelFromXP(totalXP)
-	if level >= MAX_LEVEL then
-		return 0, 0   -- maxed out
+	if level >= Skills.MAX_LEVEL then
+		return 0, 0
 	end
-	local currentFloor = XP_TABLE[level]
-	local nextFloor    = XP_TABLE[level + 1]
-	return totalXP - currentFloor, nextFloor - currentFloor
+	return totalXP - XP_TABLE[level], XP_TABLE[level + 1] - XP_TABLE[level]
+end
+
+-- ─── Stat XP — ATK / DEF (stat rate) ────────────────────────────────────────
+-- stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.373))   for levels 0–54
+-- stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.171))   for levels 55–99
+-- STAT_XP_TABLE[stat] = cumulative ticks needed to reach that stat level.
+-- STAT_XP_TABLE[0] = 0 (stat level 0 = no bonus).
+local STAT_XP_TABLE = { [0] = 0 }
+for s = 1, Skills.MAX_LEVEL do
+	if s <= 54 then
+		STAT_XP_TABLE[s] = math.floor(s ^ (s / 1000 + 2.373))
+	else
+		STAT_XP_TABLE[s] = math.floor(s ^ (s / 1000 + 2.171))
+	end
+end
+Skills.STAT_XP_TABLE = STAT_XP_TABLE
+
+-- Returns the stat level for a given cumulative tick count.
+function Skills.StatLevelFromXP(totalStatXP: number): number
+	for lvl = Skills.MAX_LEVEL, 1, -1 do
+		if totalStatXP >= STAT_XP_TABLE[lvl] then
+			return lvl
+		end
+	end
+	return 0
+end
+
+-- Returns current ticks within level, and ticks needed for next level.
+function Skills.StatXPProgress(totalStatXP: number): (number, number)
+	local level = Skills.StatLevelFromXP(totalStatXP)
+	if level >= Skills.MAX_LEVEL then
+		return 0, 0
+	end
+	return totalStatXP - STAT_XP_TABLE[level], STAT_XP_TABLE[level + 1] - STAT_XP_TABLE[level]
 end
 
 return Skills

@@ -19,7 +19,7 @@ Config.MAP_NOISE_SEED      = 42
 Config.TOWN_RADIUS     = 12      -- tiles from spawn — hard safe boundary
 
 -- ─── Movement ─────────────────────────────────────────────────────────────────
-Config.MOVE_TWEEN_TIME = 0.18    -- seconds to slide between tiles
+Config.MOVE_TWEEN_TIME = 0.35    -- base seconds to slide between tiles (enemies; player scales with level)
 
 -- ─── Camera ───────────────────────────────────────────────────────────────────
 Config.CAM_DISTANCE         = 40       -- studs from character
@@ -28,6 +28,13 @@ Config.CAM_VERTICAL_ANGLE   = 56       -- degrees, tilt down (higher = more top-
 Config.CAM_LERP             = 0.15     -- follow smoothing (0 = instant, higher = more lag)
 
 -- ─── Combat ───────────────────────────────────────────────────────────────────
+Config.BASE_ATK         = 10      -- base weapon attack (scales with equipment later)
+Config.PLAYER_SPEED_BASE= 0.35    -- tween time at level 1 (seconds per tile; lower = faster)
+Config.PLAYER_SPEED_MIN = 0.22    -- tween time at max level (quick reflexes endgame)
+Config.PLAYER_SPEED_LEVEL= 200    -- level at which player reaches max speed
+Config.ENEMY_SPEED_BASE = 0.55    -- tween time for tier 1 enemies (slower than player early)
+Config.ENEMY_SPEED_MIN  = 0.15    -- tween time for tier 8 enemies (fast endgame)
+Config.ENEMY_RENDER_DISTANCE = 200  -- studs — enemies beyond this skip AI, GUI, and path checks
 Config.AUTO_ATTACK_RANGE   = 1   -- cardinal-adjacent tile only
 Config.AUTO_ATTACK_INTERVAL= 1.0 -- seconds between player attacks
 Config.ENEMY_ATTACK_INTERVAL= 1.5

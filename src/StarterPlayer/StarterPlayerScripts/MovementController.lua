@@ -18,6 +18,15 @@ local player = Players.LocalPlayer
 local MOVE_SPEED = Config.TILE_SIZE / Config.MOVE_TWEEN_TIME
 local MOVE_TWEEN = TweenInfo.new(Config.MOVE_TWEEN_TIME, Enum.EasingStyle.Linear)
 
+-- Returns current player speed (tween time per tile) based on level
+local function getPlayerSpeed()
+	local char = player.Character
+	local ls = char and char:FindFirstChild("leaderstats")
+	local level = ls and ls:FindFirstChild("Level") and ls.Level.Value or 1
+	local t = math.clamp(level / Config.PLAYER_SPEED_LEVEL, 0, 1)
+	return Config.PLAYER_SPEED_BASE + (Config.PLAYER_SPEED_MIN - Config.PLAYER_SPEED_BASE) * t
+end
+
 -- ─── Tile helpers ─────────────────────────────────────────────────────────────
 local function tileToWorld(tx, tz)
 	return Vector3.new(
@@ -175,13 +184,16 @@ if player.Character then setupCharacter(player.Character) end
 local function slideToWorld(targetPos, facingDir, token)
 	if not hrp or not isAlive() then return false end
 
+	local speed = getPlayerSpeed()
+	local moveSpeed = Config.TILE_SIZE / speed
+
 	while token == moveToken and isAlive() and hrp do
 		local delta = Vector3.new(
 			targetPos.X - hrp.Position.X, 0, targetPos.Z - hrp.Position.Z)
 		if delta.Magnitude <= 0.03 then break end
 
 		local dt   = RunService.Heartbeat:Wait()
-		local step = math.min(delta.Magnitude, MOVE_SPEED * dt)
+		local step = math.min(delta.Magnitude, moveSpeed * dt)
 		local dir  = delta.Unit
 		facingDir  = dir
 		hrp.CFrame = CFrame.lookAt(
@@ -347,6 +359,37 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
 		return
 	end
 
+	-- ── Attack-move path (server-driven walk-to-enemy) ─────────────────────────
+	if requestId == -1 and path and #path > 0 then
+		-- Cancel any current movement
+		moveToken += 1
+		isMoving = false
+		requestedTileX = nil
+		requestedTileZ = nil
+		clearHighlight()
+		stopWalk()
+
+		-- Animate the path directly
+		moveToken += 1
+		local token = moveToken
+		isMoving = true
+		playWalk()
+
+		for _, step in ipairs(path) do
+			if token ~= moveToken then return end
+			if not moveStep(step[1], step[2], token) then
+				if token == moveToken then stopWalk() end
+				return
+			end
+		end
+
+		isMoving = false
+		currentTileX = path[#path][1]
+		currentTileZ = path[#path][2]
+		stopWalk()
+		return
+	end
+
 	-- ── Animate server-approved path ──────────────────────────────────────────
 	if requestedTileX == tx and requestedTileZ == tz and requestId == moveRequestId then
 		acceptedMoveRequestId = requestId
@@ -355,11 +398,27 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
 end)
 
 -- ─── Click-to-move ────────────────────────────────────────────────────────────
+local function getEnemyFromPart(part)
+	local obj = part
+	while obj do
+		if obj:IsA("Model") and obj:GetAttribute("EnemyId") then
+			return obj
+		end
+		obj = obj.Parent
+	end
+	return nil
+end
+
 local mouse = player:GetMouse()
 mouse.Button1Down:Connect(function()
 	if not isAlive() then return end
+
 	local target = mouse.Target
 	if not target then return end
+
+	-- If clicked on an enemy, skip movement (CombatController handles it)
+	if getEnemyFromPart(target) then return end
+
 	local tx, tz = target.Name:match("^Tile_(%d+)_(%d+)$")
 	if tx and tz then
 		requestMove(tonumber(tx), tonumber(tz))
