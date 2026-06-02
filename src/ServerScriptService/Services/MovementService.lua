@@ -15,7 +15,8 @@ local playerTiles   = {}   -- [userId] = { tx, tz }  — tracks current server t
 local playerMoveSeq = {}
 local EnemyService
 
-local MAX_PATH_NODES = Config.GRID_WIDTH * Config.GRID_HEIGHT
+-- Cap path length to prevent a malicious client from triggering A* across the full grid.
+local MAX_PATH_NODES = 128
 
 local function isPlayerTileOccupied(tx, tz, exceptPlayer)
 	for userId, tile in pairs(playerTiles) do
@@ -55,7 +56,10 @@ local function findPlayerPath(player, fromX, fromZ, tx, tz)
 	end
 
 	if not isPassable(tx, tz) then return nil end
-	return Pathfinder.FindPath(isPassable, fromX, fromZ, tx, tz, MAX_PATH_NODES)
+	local path = Pathfinder.FindPath(isPassable, fromX, fromZ, tx, tz, MAX_PATH_NODES)
+	-- Reject paths that exceed the cap — client requested something unreasonably far
+	if path and #path > MAX_PATH_NODES then return nil end
+	return path
 end
 
 -- ─── Move handler ─────────────────────────────────────────────────────────────
@@ -129,7 +133,10 @@ Players.PlayerAdded:Connect(function(player)
 		end
 
 		task.wait(0.2)
-		PlayerMoved:FireClient(player, player.UserId, spawnTx, spawnTz)
+		-- FIX: pass nil path and sentinel requestId = 0 so the client can
+		-- unambiguously detect this as a spawn snap and not a normal path update,
+		-- even if PlayerMoved fires before setupCharacter sets spawned = false.
+		PlayerMoved:FireClient(player, player.UserId, spawnTx, spawnTz, nil, 0)
 	end)
 end)
 
