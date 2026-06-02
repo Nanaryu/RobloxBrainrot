@@ -7,11 +7,7 @@
 
 local Pathfinder = {}
 
--- isWalkable(tx, tz) → bool  — injected so this module stays pure (no service deps)
--- maxNodes caps search size to prevent server freezes on huge grids
-
 local function heuristic(ax, az, bx, bz)
-	-- Manhattan distance (no diagonals)
 	return math.abs(ax - bx) + math.abs(az - bz)
 end
 
@@ -24,13 +20,12 @@ local function orderedNeighbours(cx, cz, goalX, goalZ)
 
 	for _, off in ipairs(BASE_NEIGHBOURS) do
 		local nx, nz = cx + off[1], cz + off[2]
-		local axisNeed = (off[1] ~= 0) and remainingX or remainingZ
+		local axisNeed   = (off[1] ~= 0) and remainingX or remainingZ
 		local balanceNeed = (off[1] ~= 0) and remainingZ or remainingX
 		table.insert(neighbours, {
-			dx = off[1],
-			dz = off[2],
-			h = heuristic(nx, nz, goalX, goalZ),
-			axisNeed = axisNeed,
+			dx = off[1], dz = off[2],
+			h  = heuristic(nx, nz, goalX, goalZ),
+			axisNeed    = axisNeed,
 			balanceNeed = balanceNeed,
 		})
 	end
@@ -57,15 +52,14 @@ function Pathfinder.FindPath(
 
 	if startX == goalX and startZ == goalZ then return {} end
 
-	-- Node key helper
-	local function key(x, z) return x * 10000 + z end
+	local function key(x, z) return x * 100000 + z end
 
-	local openSet   = {}   -- min-heap (we use a simple sorted insert for now)
-	local cameFrom  = {}   -- key → {px, pz}
-	local gScore    = {}   -- key → number
-	local inOpen    = {}   -- key → bool
+	local openSet  = {}
+	local cameFrom = {}   -- key → { px, pz }  (parent tile coords)
+	local gScore   = {}
+	local inOpen   = {}
 
-	local startKey  = key(startX, startZ)
+	local startKey = key(startX, startZ)
 	gScore[startKey] = 0
 
 	table.insert(openSet, {
@@ -78,58 +72,61 @@ function Pathfinder.FindPath(
 	local visited = 0
 
 	while #openSet > 0 do
-		-- Pop node with lowest f  (linear scan — fine for tile RPG distances ≤ ~64)
+		-- Pop node with lowest f (linear scan — acceptable for ≤128-node cap)
 		local bestIdx = 1
 		for i = 2, #openSet do
 			if openSet[i].f < openSet[bestIdx].f
-				or (openSet[i].f == openSet[bestIdx].f and openSet[i].h < openSet[bestIdx].h) then
+				or (openSet[i].f == openSet[bestIdx].f
+					and openSet[i].h < openSet[bestIdx].h) then
 				bestIdx = i
 			end
 		end
-		local current = table.remove(openSet, bestIdx)
-		local cx, cz  = current.x, current.z
-		local ck      = key(cx, cz)
-		inOpen[ck]    = nil
-		visited       = visited + 1
+
+		local current  = table.remove(openSet, bestIdx)
+		local cx, cz   = current.x, current.z
+		local ck       = key(cx, cz)
+		inOpen[ck]     = nil
+		visited       += 1
 
 		if cx == goalX and cz == goalZ then
-			-- Reconstruct path
-			local path = {}
-			local node = ck
-			while cameFrom[node] do
-				local p = cameFrom[node]
-				table.insert(path, 1, { p.nx, p.nz })
-				node = key(p.px, p.pz)
+			-- ── Single-pass reconstruction ──────────────────────────────
+			-- Walk cameFrom chain from goal back to start, then reverse.
+			local path  = {}
+			local nodeX = cx
+			local nodeZ = cz
+			-- Always include goal
+			table.insert(path, { nodeX, nodeZ })
+			local nodeKey = ck
+			while cameFrom[nodeKey] do
+				local parent = cameFrom[nodeKey]
+				nodeX = parent.px
+				nodeZ = parent.pz
+				nodeKey = key(nodeX, nodeZ)
+				-- Stop before re-inserting the start node
+				if nodeX == startX and nodeZ == startZ then break end
+				table.insert(path, { nodeX, nodeZ })
 			end
-			-- path currently holds parent coords; rebuild as forward steps
-			-- Actually reconstruct properly:
-			path = {}
-			local trace = { x = cx, z = cz }
-			while cameFrom[key(trace.x, trace.z)] do
-				table.insert(path, 1, { trace.x, trace.z })
-				local prev = cameFrom[key(trace.x, trace.z)]
-				trace = { x = prev.px, z = prev.pz }
-			end
-			table.insert(path, 1, { trace.x, trace.z })
-			-- Remove start node if it crept in
-			if path[1][1] == startX and path[1][2] == startZ then
-				table.remove(path, 1)
+			-- Reverse so path goes start→goal (start excluded, goal included)
+			local lo, hi = 1, #path
+			while lo < hi do
+				path[lo], path[hi] = path[hi], path[lo]
+				lo += 1
+				hi -= 1
 			end
 			return path
 		end
 
 		if visited >= maxNodes then
-			-- Too far / blocked — return nil
 			return nil
 		end
 
 		for _, off in ipairs(orderedNeighbours(cx, cz, goalX, goalZ)) do
 			local nx, nz = cx + off.dx, cz + off.dz
 			if isWalkable(nx, nz) then
-				local nk      = key(nx, nz)
-				local tentG   = (gScore[ck] or math.huge) + 1
+				local nk     = key(nx, nz)
+				local tentG  = (gScore[ck] or math.huge) + 1
 				if tentG < (gScore[nk] or math.huge) then
-					cameFrom[nk] = { px = cx, pz = cz, nx = nx, nz = nz }
+					cameFrom[nk] = { px = cx, pz = cz }
 					gScore[nk]   = tentG
 					if not inOpen[nk] then
 						local h = heuristic(nx, nz, goalX, goalZ)
@@ -145,7 +142,7 @@ function Pathfinder.FindPath(
 		end
 	end
 
-	return nil  -- no path found
+	return nil
 end
 
 return Pathfinder
