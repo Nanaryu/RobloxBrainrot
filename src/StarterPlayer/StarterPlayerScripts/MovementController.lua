@@ -268,6 +268,10 @@ local function requestMove(tx, tz)
 	if not isTileWalkable(tx, tz) then return end
 	if isEnemyOnTile(tx, tz) then return end
 
+	-- Cap click distance to prevent laggy long-range pathfinding
+	local clickDist = math.abs(tx - currentTileX) + math.abs(tz - currentTileZ)
+	if clickDist > Config.MAX_CLICK_DISTANCE then return end
+
 	-- If the server hasn't confirmed our spawn tile yet, queue the destination
 	-- and let the PlayerMoved spawn-snap handler replay it.
 	if not spawned then

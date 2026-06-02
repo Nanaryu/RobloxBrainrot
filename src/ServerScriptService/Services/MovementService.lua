@@ -16,7 +16,7 @@ local playerMoveSeq = {}
 local EnemyService
 
 -- Cap path length to prevent a malicious client from triggering A* across the full grid.
-local MAX_PATH_NODES = 128
+local MAX_PATH_NODES = 400
 
 local function isPlayerTileOccupied(tx, tz, exceptPlayer)
 	for userId, tile in pairs(playerTiles) do

@@ -48,7 +48,7 @@ function Pathfinder.FindPath(
 	maxNodes: number?
 ): { {number} }
 
-	maxNodes = maxNodes or 400
+	maxNodes = maxNodes or 800
 
 	if startX == goalX and startZ == goalZ then return {} end
 
@@ -72,7 +72,7 @@ function Pathfinder.FindPath(
 	local visited = 0
 
 	while #openSet > 0 do
-		-- Pop node with lowest f (linear scan — acceptable for ≤128-node cap)
+		-- Pop node with lowest f (linear scan — acceptable for ≤800-node cap)
 		local bestIdx = 1
 		for i = 2, #openSet do
 			if openSet[i].f < openSet[bestIdx].f

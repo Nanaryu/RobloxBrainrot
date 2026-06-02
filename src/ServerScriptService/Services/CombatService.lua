@@ -83,7 +83,7 @@ local function doAttackTick(player: Player)
 		local enemyId = model:GetAttribute("EnemyId")
 		if enemyId and model:GetAttribute("State") ~= "dead" then
 			es.DamageEnemy(enemyId, share, player)
-			ss.GrantAttackXP(player, 2)
+			ss.GrantAttackXP(player, 1)
 
 			-- FIX: pass damage and enemyId so DamageNumbers.client.lua can
 			-- spawn a floating number above the correct enemy model.

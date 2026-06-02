@@ -10,7 +10,6 @@
 local Players           = game:GetService("Players")
 local DataStoreService  = game:GetService("DataStoreService")
 
-local oldStore = DataStoreService:GetDataStore("Stats")
 local killStore = DataStoreService:GetDataStore("KillTracker_v1")
 
 local KillTrackerService = {}
@@ -31,14 +30,6 @@ local function getData(player: Player)
 end
 
 -- ─── DataStore helpers ────────────────────────────────────────────────────────
-local function savePlayer(player: Player)
-	local data = killData[player.UserId]
-	if not data then return end
-	pcall(function()
-		killStore:SetAsync(tostring(player.UserId), data)
-	end)
-end
-
 local function loadPlayer(player: Player)
 	local ok, result = pcall(function()
 		return killStore:GetAsync(tostring(player.UserId))
@@ -94,9 +85,6 @@ function KillTrackerService.RegisterKill(player: Player, enemyName: string)
 	-- Update leaderboard display
 	syncLeaderboard(player)
 
-	-- Auto-save on every kill (DataStore budget allows ~60 writes/min per key)
-	savePlayer(player)
-
 	print(string.format("[KillTracker] %s killed %s (×%d) | Total kills: %d",
 		player.Name, enemyName, data[enemyName], data._total))
 end
@@ -114,20 +102,52 @@ function KillTrackerService.GetTotalKills(player: Player): number
 	return data._total or 0
 end
 
+-- ─── Deferred save (stagger writes, avoid DataStore budget spike) ─────────────
+local pendingSaves = {} -- userId → snapshot data (waiting for delayed save)
+
+local function scheduleSave(userId: number, data: table)
+	pendingSaves[userId] = data
+	task.delay(0.5, function()
+		if pendingSaves[userId] then
+			pcall(function()
+				killStore:SetAsync(tostring(userId), data)
+			end)
+			pendingSaves[userId] = nil
+		end
+	end)
+end
+
+local function flushSaves()
+	local toSave = pendingSaves
+	pendingSaves = {}
+	for userId, data in pairs(toSave) do
+		pcall(function()
+			killStore:SetAsync(tostring(userId), data)
+		end)
+	end
+end
+
 -- ─── Player lifecycle ─────────────────────────────────────────────────────────
 Players.PlayerAdded:Connect(function(player)
 	loadPlayer(player)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-	savePlayer(player)
+	local data = killData[player.UserId]
 	killData[player.UserId] = nil
+	if not data then return end
+	scheduleSave(player.UserId, data)
 end)
 
 -- Handle players already in-game (Studio play-solo)
 for _, player in ipairs(Players:GetPlayers()) do
 	loadPlayer(player)
 end
+
+-- Handle Studio stop button / server shutdown
+game:BindToClose(function()
+	flushSaves()
+end)
 
 print("[KillTrackerService] Ready.")
 return KillTrackerService

@@ -26,6 +26,7 @@ BrainrotRPG/
     │       ├── ItemData.lua                  ✅  item templates, stat ranges, rarity pools
     │       ├── Pathfinder.lua                ✅
     │       ├── RerollSystem.lua              ✅
+    │       ├── ZoneData.lua                  ✅  zone definitions: 5 blob zones with center+radii, colors, spawn tables
     │       └── Skills.lua                    ✅  (required by HUDController + SkillService)
     ├── ServerScriptService/
     │   ├── Core/
@@ -33,12 +34,13 @@ BrainrotRPG/
     │   │   ├── Main.server.lua               ✅  boots all services in dependency order
     │   │   └── Leaderboard.server.lua        ✅  Level/Coins with DataStore; Kills owned by KillTrackerService
     │   └── Services/
-    │       ├── TileGridService.lua           ✅
+    │       ├── TileGridService.lua           ✅  256×256 irregular map, zone-colored tiles, noise boundary
     │       ├── MovementService.lua           ✅
     │       ├── SkillService.lua              ✅  Attack/Defense XP, level-up, SkillUpdated remote
-    │       ├── EnemyService.lua              ✅  calls KillTrackerService.RegisterKill on _Kill
+    │       ├── EnemyService.lua              ✅  zone-based spawning, leash + return state, town boundary
     │       ├── KillTrackerService.lua        ✅  per-enemy + global kills, "KillTracker_v1" DataStore
     │       ├── LootService.lua               ✅  drop rolls, world items, auto-pickup, inventory
+    │       ├── ZoneService.lua               ✅  zone lookup, safe-zone checks, random tile-in-zone
     │       └── CombatService.lua             ✅
     └── StarterPlayer/
         └── StarterPlayerScripts/
@@ -86,11 +88,16 @@ StarterGui/
 |-----|-------|-------|
 | TILE_SIZE | 8 studs | |
 | TILE_HEIGHT | 0.5 studs | |
-| GRID_WIDTH / HEIGHT | 64 × 64 | |
+| GRID_WIDTH / HEIGHT | 256 × 256 | |
+| MAP_NOISE_AMPLITUDE | 0.55 | Zone boundary organic wobble |
+| MAP_NOISE_SEED | 42 | Change for different map shapes |
+| TOWN_RADIUS | 12 tiles | Hard safe boundary — enemies blocked |
+| MAX_CLICK_DISTANCE | 25 tiles | Client click-to-move range cap |
 | MOVE_TWEEN_TIME | 0.18 s | player & enemy slide speed |
 | AUTO_ATTACK_RANGE | 1 tile | Manhattan == 1 |
 | AUTO_ATTACK_INTERVAL | 1.0 s | |
 | ENEMY_ATTACK_INTERVAL | 1.5 s | |
+| CAM_VERTICAL_ANGLE | 56 | Higher = more top-down, better click balance |
 | ELITE_SPAWN_CHANCE | 5 % | |
 | ELITE_STAR_MAX | 5 | |
 | PREMIUM_NAME | "Crystals" | TBD |
@@ -100,10 +107,23 @@ StarterGui/
 ## 🏗️ Implemented Systems
 
 ### ✅ Tile Grid (TileGridService)
-- 64×64 anchored Parts under `Workspace/Map/TileGrid/Tiles`
-- Checkerboard coloring; golden spawn tile at grid centre
+- 256×256 anchored Parts under `Workspace/Map/TileGrid/Tiles`
+- Irregular boundary via fractal noise (deterministic, seed = 42)
+- Voronoi + noise zone assignment: each tile assigned to nearest zone centre with organic wobble
+- 5 zones with unique tile colours + materials
 - `TileToWorld`, `WorldToTile`, `IsWalkable`, `GetNeighbours`, `SetTileType`, `SetTileWalkable`
+- `GetZone(tx, tz)` returns zone id string for a tile
 - `SetTileType(tx, tz, "Water")` marks unwalkable + recolors
+
+### ✅ Zone System (ZoneService + ZoneData)
+- 5 zones: Town (safe), Grasslands (Tier 1), Desert (Tier 2), Swamp (Tier 3), Volcano (Tier 4)
+- Zones are organic blobs — centre offset + radius + noise amplitude (not concentric rings)
+- Town is a hard safe boundary (`TOWN_RADIUS = 12` tiles) — enemies cannot enter
+- `ZoneService.GetZoneAt(tx, tz)` → zone table or nil (void tile)
+- `ZoneService.IsSafeZone(tx, tz)` — true for Town only
+- `ZoneService.GetRandomTileInZone(zoneId)` — random walkable tile in a zone
+- `ZoneData.BuildSpawnPool(zone)` / `ZoneData.PickEnemy(zone, pool)` — weighted random enemy selection
+- Each zone has `spawnDensity`, `leashRange`, and `spawnEnemies` weighted list
 
 ### ✅ Player Movement (MovementController + MovementService)
 - WASD + click-to-move on `Tile_X_Z` parts
@@ -118,20 +138,24 @@ StarterGui/
 - `MovementService.GetPlayerTile(player)` exposed
 
 ### ✅ Isometric Camera (IsoCamera.client.lua — StarterPlayerScripts)
-- Scriptable camera, 45° horizontal / 40° vertical / 40 studs
+- Scriptable camera, 45° horizontal / 56° vertical / 40 studs
 - Framerate-independent exponential lerp follow; re-locks on respawn
 
 ### ✅ A* Pathfinding (Pathfinder.lua)
 - Pure module, injected `isWalkable(tx,tz)` — no service deps
 - Manhattan heuristic, 4-directional; goal-aware tie-breaking
-- `maxNodes` cap (default 400); returns `{tx,tz}[]` start-exclusive
+- `maxNodes` cap (default 800); returns `{tx,tz}[]` start-exclusive
 
 ### ✅ Enemy System (EnemyService)
 - Models in `Workspace/Map/Enemies`; clones from `ServerStorage/EnemyModels/[name]`, fallback cube
-- **3-state AI**: `wander` → A* to random tile in `wanderRange`, 2–4 s pause; `chase` → re-paths toward nearest player; `attack` → faces player, damages every `ENEMY_ATTACK_INTERVAL`
+- **4-state AI**: `wander` → A* to random tile in `wanderRange`, 2–4 s pause; `chase` → re-paths toward nearest player; `attack` → faces player, damages every `ENEMY_ATTACK_INTERVAL`; `return` → walks back to spawn after leash break
 - Occupied-tile set; `CurrentTileX/Z` + `MovingToTileX/Z` both player-blocking
+- **Leash system**: enemy drops aggro and enters `return` state when > `leashRange` tiles from spawn
+- **Town boundary**: enemies cannot path into Town zone tiles (`isPassableForEnemy` rejects safe-zone tiles)
 - **Elite system**: 5 % chance, 1–5 stars, HP/DMG multiplied per Config tables
 - **Overhead BillboardGui**: rarity-colored name (★ prefix) + green→red HP bar
+- **Zone-based spawning**: enemies fill non-safe zones based on `spawnDensity`; weighted random picks from `ZoneData.spawnEnemies`
+- **Respawn timer**: killed enemies queue respawn in their zone (8–15 s delay)
 - `EnemyService.DamageEnemy(id, amount, player)`, `GetEnemy(id)`, `GetEnemyAtTile(tx, tz)`
 - `_Kill` calls `KillTrackerService.RegisterKill(killer, enemyName)` and `LootService.Drop(model, killer)`
 
@@ -144,25 +168,32 @@ StarterGui/
 - **Leaderboard.server.lua** does NOT touch `Kills` in `refreshDisplay` or `PlayerRemoving` — KillTracker owns it entirely
 
 ### ✅ Combat (CombatService + CombatController)
-- Client: click enemy → yellow `SelectionBox` → walk → auto-attack loop; Escape cancels
-- Client: faces enemy during attack; red screen flash on taking damage; pointer cursor on hover
-- Client: receives `EnemyHPUpdate` and refreshes billboard HP bar
-- Server: per-player auto-attack loop at `AUTO_ATTACK_INTERVAL`; damage = `10 + GetAttackBonus()` ±10%, grants 2 Attack XP per hit
+- **Click-to-attack**: click enemy → `RequestAttack(enemyId)` → yellow SelectionBox → auto-attack loop
+- Escape key → `StopAttack` → deselect; target dies / out of range / player moves → deselect
+- Server: per-player auto-attack loop at `AUTO_ATTACK_INTERVAL`; single target only
+- **Damage formula** (PENDING): `(ATK_Level × BASE_ATK) / 20` to `/10`, minus enemy_DEF
+- **Defense formula** (PENDING): `max(1, enemy_damage - DEF_Level)` — flat subtraction
+- If accuracy = 0 (max_raw ≤ enemy_DEF): deal 0 — hard progression gate
+- No damage split — Rucoy-style 1v1 targeting
+- Grants ATK stat XP per hit; DEF stat XP granted in EnemyService._DamagePlayer
 - Equipment stat not yet factored in (pending inventory/equip system)
 - Dead players blocked from movement and combat (client + server)
 
 ### ✅ Skills (Skills.lua + SkillService.lua)
 - Constants: `Skills.ATTACK`, `Skills.DEFENSE`, `Skills.MAX_LEVEL = 99`
-- Pre-built `XP_TABLE[level]` — cumulative XP; base 100 XP, ×1.35 scale per tier
-- `GrantAttackXP(player, amount)` / `GrantDefenseXP(player, amount)` — 0.1s debounce
-- `GetAttackBonus(player)` → `(level-1) * 0.5` flat ATK
-- `GetDefenseReduction(player)` → `level / (level + 80)`, capped at 0.75
+- **Dual XP system** (two independent progression tracks):
+  - Character Level XP: `xp_for_level(n) = floor(n ^ (n/1000 + 3))` — granted per enemy kill via `enemy.xp`
+  - Stat XP (ATK/DEF): `stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.373))` for 0-54, `floor(n ^ (n/1000 + 2.171))` for 55-99 — 1 tick per hit (ATK) or per damage taken (DEF)
+- `GrantAttackXP(player, amount)` / `GrantDefenseXP(player, amount)` — no debounce, each enemy hit grants independently
+- `GetAttackBonus(player)` → `(level-1) * 0.5` flat ATK (PENDING: will use new formula)
+- `GetDefenseReduction(player)` → `level / (level + 80)`, capped at 0.75 (PENDING: will use flat subtraction)
 - Fires `SkillUpdated` after every grant with full payload for both skills
+- Persisted to `"Skills_v1"` DataStore (saved on PlayerRemoving + BindToClose)
 
 ### ✅ Loot System (ItemData.lua + LootService.lua)
 - 50+ item templates across 6 slots (weapon, offhand, helmet, chest, legs, boots), all 7 rarities
 - Drop chain: `EnemyService._Kill` → `LootService.Drop` → world neon sphere in `Workspace/Map/Loot` → 0.3s pickup loop → `InventoryUpdated` remote
-- Auto-pickup within 1 tile (Manhattan); first player wins
+- Auto-pickup on exact tile (Manhattan == 0); first player wins
 - In-memory `inventories[userId]`; `GetInventory` RemoteFunction wired
 - Elite star count bumps item rarity tier on drop
 
@@ -274,22 +305,29 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [x] Left panel UI (hover anims, sounds, panel open/close)
 - [x] Sound effect hooks (placeholder IDs)
 - [x] Death input lockout (movement + combat)
+- [x] Map expansion (256×256 Voronoi + noise blob zones)
+- [x] Zone system (5 organic blobs: Town + 4 biome quadrants)
+- [x] Zone-based enemy spawning with density + respawn timer
+- [x] Safe zone (Brainrot Town — 12 tile radius, no enemies)
+- [x] Enemy leash system (return-to-spawn after exceeding leash range)
+- [x] Click-to-move distance cap (25 tiles)
 - [ ] Item equip system + player stat scaling
 - [ ] Item reroll UI
 - [ ] Full DataStore persistence (inventory, equipment)
-- [ ] Zone/area system (replace hardcoded test spawns)
 - [ ] NPC shop (premium currency)
 - [ ] Offline player shops
 - [ ] Full death/respawn flow polish
 - [ ] Game name
+- [ ] Rucoy-style damage formula (multiplicative ATK × baseATK, flat DEF subtraction)
+- [ ] Click-to-attack enemy selection (restore RequestAttack/StopAttack flow)
+- [ ] Dual XP system (character level from kills + stat XP from using skills)
+- [ ] Enemy speed nerf (reduce by 2-3 across all tiers)
 
 ---
 
 ## 📝 Open Decisions
 - [ ] Game name
 - [ ] Item slots (sword, staff, shield, helmet, chest, legs, boots?)
-- [ ] Player stat formula (ATK/DEF scaling with equipment)
-- [ ] Zone layout — which enemies spawn where
 - [ ] Respawn mechanic (timer? cost? safe zone?)
 - [ ] Premium currency final name (currently "Crystals")
 - [ ] Offline shop slot limit and duration tiers
@@ -298,12 +336,94 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 
 ## 🔑 Key Implementation Notes
 - **Kill tracking ownership**: KillTrackerService is sole owner of kill counts. Leaderboard.server.lua does NOT write `Kills.Value` in `refreshDisplay` or save it in `PlayerRemoving`. KillTracker sets `leaderstats.Kills.Value` via `WaitForChild` after load to win the race condition.
-- **DataStores in use**: `"Stats"` (Level, Coins via Leaderboard), `"KillTracker_v1"` (kills via KillTrackerService), inventory TBD
+- **DataStores in use**: `"Stats"` (Level, Coins via Leaderboard), `"KillTracker_v1"` (kills via KillTrackerService), `"Skills_v1"` (Attack/Defense XP via SkillService), `"Inventory_v1"` (inventory via LootService) — all saved on PlayerRemoving + BindToClose only (batched, no per-kill writes)
 - Enemy defense reduction: `level / (level + 80)` capped at 0.75
 - Attack bonus: `(level-1) * 0.5` flat, added before ±10% roll
-- Attack XP: 2 per hit (CombatService); Defense XP: 1 per hit taken (EnemyService._DamagePlayer)
+- Attack XP: 1 per enemy hit (CombatService); Defense XP: 1 per hit taken (EnemyService._DamagePlayer)
 - `SkillUpdated` fires after every XP grant + on CharacterAdded (0.5s delay) for HUD init
 - Loot drop chain: `EnemyService._Kill` → `KillTrackerService.RegisterKill` + `LootService.Drop` → world Part → pickup loop → `InventoryUpdated`
 - `ItemData._byRarity[rarityName]` pre-built array for fast random picks
 - Inventory slot template children must be named `ItemIcon` (ImageLabel) and `ItemLabel` (TextLabel)
 - Main.server.lua boot order: TileGrid → Movement → Skills → Enemy → KillTracker → Loot → Combat
+
+---
+
+## 🎯 Rucoy Online Formulas (reference: `damage_formulas/formulas.js`)
+
+### Character Level XP (grind rate section)
+```
+xp_for_level(n) = floor(n ^ (n/1000 + 3))
+```
+- Level 1 = 1, Level 10 ≈ 1,260, Level 50 ≈ 163K, Level 99 ≈ 1.1M cumulative
+- Granted per enemy kill: `enemy.xp` value from EnemyData
+
+### Stat XP — ATK / DEF (stat rate section)
+```
+stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.373))   -- levels 0–54
+stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.171))   -- levels 55–99
+```
+- 1 tick per auto-attack hit → ATK levels up
+- 1 tick per damage taken → DEF levels up
+- Separate from character level (two independent progression tracks)
+
+### Damage Formula (auto-attack)
+```
+baseATK = Config.BASE_ATK (10, scales with equipment later)
+min_raw = (ATK_Level × baseATK) / 20
+max_raw = (ATK_Level × baseATK) / 10
+accuracy = clamp((max_raw - enemy_DEF) / (max_raw - min_raw), 0, 1)
+```
+- If accuracy = 0 (max_raw ≤ enemy_DEF): deal 0 damage — hard progression gate
+- If accuracy > 0: roll `random(min_raw, max_raw) - enemy_DEF`
+- No damage split — single target only (player-selected via click-to-attack)
+- Source: `formulas.js` lines 45-54, 76-88, 100-118
+
+### Defense Formula (player taking damage)
+```
+final_damage = max(1, enemy_damage - DEF_Level)
+```
+- Flat subtraction, no cap, no %
+- DEF 15 → tier 1 enemies (dmg 3-10) deal 1 damage
+- DEF 50 → tier 2 enemies (dmg 14-32) deal 1 damage
+- Source: Rucoy wiki — mob damage reduced by player DEF level
+
+### Enemy Defense Values (EnemyData)
+| Tier | Defense Range | Example |
+|------|--------------|---------|
+| 1 (Common) | 2-8 | Noobini: 2, Pipi Kiwi: 6 |
+| 2 (Rare) | 12-25 | Trippi Troppi: 12, Frogo Elfo: 22 |
+| 3 (Epic) | 35-55 | Cappuccino: 35, Penguino: 55 |
+| 4 (Legendary) | 80-150 | Burbaloni: 80, Sigma Girl: 150 |
+
+### Enemy Speed Nerf
+| Tier | Old Range | New Range |
+|------|-----------|-----------|
+| 1 | 8-10 | 6-7 |
+| 2 | 10-12 | 7-8 |
+| 3 | 13-15 | 9-10 |
+| 4 | 15-18 | 10-12 |
+
+### Click-to-Attack (restoring from old system)
+- Client: click enemy → `RequestAttack(enemyId)` → yellow SelectionBox
+- Server: tracks `attackTarget[userId] = enemyId`; auto-attack hits only selected target
+- Target dies / moves out of range / player moves → deselect
+- Escape key → `StopAttack` → deselect
+- Walk-to-enemy if not adjacent (server validates range)
+
+### Rucoy Mob Reference Data (from `formulas.js`)
+| Mob | Level | Defense | HP |
+|-----|-------|---------|-----|
+| Rat | 1 | 4 | 25 |
+| Mummy | 25 | 36 | 80 |
+| Assassin | 50 | 81 | 140 |
+| Vampire | 100 | 171 | 450 |
+| Yeti | 350 | 826 | 60,000 |
+
+### Design Decisions (from user discussion)
+- Game should NOT be too easy — hard defense gates are fine
+- No damage below enemy defense — player must level up to progress
+- Two XP tracks: level XP (from kills) and stat XP (from using skills)
+- Training weapons (low baseATK) can be added later for XP farming
+- AoE power skill can be added later as separate feature
+- Damage split removed — Rucoy-style 1v1 targeting
+- Enemy speed reduced to compensate for removing split

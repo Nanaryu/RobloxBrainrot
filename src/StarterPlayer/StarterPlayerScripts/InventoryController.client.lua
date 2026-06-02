@@ -10,14 +10,31 @@ local Remotes          = ReplicatedStorage:WaitForChild("Remotes")
 local InventoryUpdated = Remotes:WaitForChild("InventoryUpdated")
 local GetInventory     = Remotes:WaitForChild("GetInventory")
 
-local mainGui        = playerGui:WaitForChild("MainGui")
-local inventoryPanel = mainGui:WaitForChild("InventoryPanel")
-local container      = inventoryPanel:WaitForChild("InventoryContainer")
-local scrollFrame    = container:WaitForChild("ScrollingFrame")
-local templateSlot   = scrollFrame:WaitForChild("InvSlot")
+local scrollFrame    = nil
+local templateSlot   = nil
 
--- Hide the template immediately so it never shows
-templateSlot.Visible = false
+local function acquireRefs()
+	local mainGui        = playerGui:WaitForChild("MainGui", 10)
+	if not mainGui then return false end
+	local inventoryPanel = mainGui:FindFirstChild("InventoryPanel")
+	if not inventoryPanel then return false end
+	local container      = inventoryPanel:FindFirstChild("InventoryContainer")
+	if not container then return false end
+	scrollFrame          = container:FindFirstChild("ScrollingFrame")
+	if not scrollFrame then return false end
+	templateSlot         = scrollFrame:FindFirstChild("InvSlot")
+	if not templateSlot then return false end
+	templateSlot.Visible = false
+	return true
+end
+
+if not acquireRefs() then
+	task.spawn(function()
+		while not acquireRefs() do
+			task.wait(0.5)
+		end
+	end)
+end
 
 local RARITY_COLOR = {
 	Common    = Color3.fromRGB(180, 180, 180),
@@ -36,6 +53,11 @@ local RARITY_ORDER = {
 local PLACEHOLDER_ICON = "rbxassetid://101140058690765"
 
 local function refreshInventory(items)
+	if not scrollFrame or not templateSlot then
+		acquireRefs()
+	end
+	if not scrollFrame or not templateSlot then return end
+
 	-- Remove all clones (everything except the template)
 	for _, child in ipairs(scrollFrame:GetChildren()) do
 		if child:IsA("Frame") and child ~= templateSlot then
@@ -110,6 +132,7 @@ InventoryUpdated.OnClientEvent:Connect(refreshInventory)
 
 -- Load on spawn (and respawn)
 local function loadInventory()
+	acquireRefs()
 	task.wait(0.5)
 	local ok, result = pcall(function()
 		return GetInventory:InvokeServer()

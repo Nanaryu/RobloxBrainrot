@@ -10,10 +10,13 @@
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService  = game:GetService("DataStoreService")
 
 local Skills   = require(ReplicatedStorage.Modules.Skills)
 local Remotes  = ReplicatedStorage:WaitForChild("Remotes")
 local SkillUpdated = Remotes:WaitForChild("SkillUpdated")
+
+local skillStore = DataStoreService:GetDataStore("Skills_v1")
 
 local SkillService = {}
 
@@ -57,17 +60,8 @@ local function fireUpdate(player: Player)
 	SkillUpdated:FireClient(player, payload)
 end
 
--- ─── XP debounce: prevent one attack round granting XP multiple times ─────────
--- Key: userId .. skillName → last grant tick
-local lastGrantTick = {}
-local GRANT_DEBOUNCE = 0.1   -- seconds; one grant per attack swing
-
+-- ─── Grant XP (no debounce — each enemy hit grants independently) ─────────────
 local function grantXP(player: Player, skillName: string, amount: number)
-	local key = player.UserId .. skillName
-	local now = tick()
-	if (lastGrantTick[key] or 0) + GRANT_DEBOUNCE > now then return end
-	lastGrantTick[key] = now
-
 	local data    = getSkillData(player)
 	local skill   = data[skillName]
 	local oldLevel = Skills.LevelFromXP(skill.totalXP)
@@ -81,7 +75,6 @@ local function grantXP(player: Player, skillName: string, amount: number)
 
 	local newLevel = Skills.LevelFromXP(skill.totalXP)
 	if newLevel ~= oldLevel then
-		-- Level-up notification can be expanded later (sound, GUI pop-up, etc.)
 		print(string.format("[SkillService] %s: %s levelled up → %d",
 			player.Name, skillName, newLevel))
 	end
@@ -99,21 +92,13 @@ function SkillService.GrantDefenseXP(player: Player, amount: number)
 end
 
 -- ─── Public: Attack bonus (flat ATK added to base damage) ────────────────────
--- Formula: each Attack level above 1 adds 0.5 flat damage (rounds down at use site).
--- Level 1 = +0, Level 50 = +24.5, Level 99 = +49.
 function SkillService.GetAttackBonus(player: Player): number
 	local data  = getSkillData(player)
 	local level = Skills.LevelFromXP(data[Skills.ATTACK].totalXP)
 	return (level - 1) * 0.5
 end
 
--- ─── Public: Defense reduction (proportion of incoming damage negated) ────────
--- Formula: soft-cap curve so it never reaches 1.0.
---   reduction = level / (level + 80)
--- Level 1  ≈ 1.2%  reduction
--- Level 20 ≈ 20%   reduction
--- Level 50 ≈ 38%   reduction
--- Level 99 ≈ 55%   reduction  (hard cap 75% enforced below)
+-- ─── Public: Defense reduction ──────────────────────────────────────────────
 function SkillService.GetDefenseReduction(player: Player): number
 	local data  = getSkillData(player)
 	local level = Skills.LevelFromXP(data[Skills.DEFENSE].totalXP)
@@ -121,26 +106,80 @@ function SkillService.GetDefenseReduction(player: Player): number
 	return math.min(raw, 0.75)
 end
 
--- ─── Player lifecycle ─────────────────────────────────────────────────────────
-Players.PlayerAdded:Connect(function(player)
+-- ─── DataStore helpers ────────────────────────────────────────────────────────
+local function loadPlayer(player: Player)
 	initPlayer(player)
-	-- Push initial state once character loads (HUD needs it on spawn)
-	player.CharacterAdded:Connect(function()
-		task.wait(0.5)   -- give HUDController time to connect
+
+	local ok, result = pcall(function()
+		return skillStore:GetAsync(tostring(player.UserId))
+	end)
+	if ok and type(result) == "table" then
+		skillData[player.UserId][Skills.ATTACK].totalXP  = tonumber(result[Skills.ATTACK])  or 0
+		skillData[player.UserId][Skills.DEFENSE].totalXP = tonumber(result[Skills.DEFENSE]) or 0
+	end
+end
+
+-- ─── Deferred save (stagger writes, avoid DataStore budget spike) ─────────────
+local pendingSaves = {} -- userId → snapshot data
+
+local function scheduleSave(userId: number, data: table)
+	pendingSaves[userId] = data
+	task.delay(1.0, function()
+		if pendingSaves[userId] then
+			pcall(function()
+				skillStore:SetAsync(tostring(userId), data)
+			end)
+			pendingSaves[userId] = nil
+		end
+	end)
+end
+
+local function flushSaves()
+	local toSave = pendingSaves
+	pendingSaves = {}
+	for userId, data in pairs(toSave) do
+		pcall(function()
+			skillStore:SetAsync(tostring(userId), data)
+		end)
+	end
+end
+
+-- ─── Player lifecycle ─────────────────────────────────────────────────────────
+local function setupPlayer(player: Player)
+	loadPlayer(player)
+
+	-- Fire initial update (in case character already exists)
+	task.spawn(function()
+		task.wait(0.5)
 		fireUpdate(player)
 	end)
-end)
+
+	-- Also fire on every respawn
+	player.CharacterAdded:Connect(function()
+		task.wait(0.5)
+		fireUpdate(player)
+	end)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
 
 Players.PlayerRemoving:Connect(function(player)
+	local data = skillData[player.UserId]
 	skillData[player.UserId] = nil
-	-- Clean up debounce keys
-	lastGrantTick[player.UserId .. Skills.ATTACK]  = nil
-	lastGrantTick[player.UserId .. Skills.DEFENSE] = nil
+	if not data then return end
+	scheduleSave(player.UserId, {
+		[Skills.ATTACK]  = data[Skills.ATTACK].totalXP,
+		[Skills.DEFENSE] = data[Skills.DEFENSE].totalXP,
+	})
+end)
+
+game:BindToClose(function()
+	flushSaves()
 end)
 
 -- Handle players already in-game (Studio play-solo)
 for _, player in ipairs(Players:GetPlayers()) do
-	initPlayer(player)
+	setupPlayer(player)
 end
 
 print("[SkillService] Ready.")

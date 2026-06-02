@@ -9,6 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config      = require(ReplicatedStorage.Modules.Config)
 local EnemyData   = require(ReplicatedStorage.Modules.EnemyData)
 local Pathfinder  = require(ReplicatedStorage.Modules.Pathfinder)
+local ZoneData    = require(ReplicatedStorage.Modules.ZoneData)
 local TileGrid    = require(script.Parent.TileGridService)
 
 local MovementService
@@ -70,8 +71,10 @@ end
 local function isPassableForEnemy(tx, tz, id)
 	if not TileGrid.IsWalkable(tx, tz) then return false end
 	if isPlayerTileOccupied(tx, tz) then return false end
+	-- Enemies cannot enter safe zones (town)
+	local zone = TileGrid.GetZone(tx, tz)
+	if zone == "Town" then return false end
 	local occupant = occupiedTiles[tx .. "_" .. tz]
-	-- Passable if unoccupied OR occupied by self
 	return occupant == nil or occupant == id
 end
 
@@ -317,6 +320,7 @@ function EnemyService.Spawn(spawnDef: {
 	model:SetAttribute("CurrentTileX", spawnDef.tx)
 	model:SetAttribute("CurrentTileZ", spawnDef.tz)
 	model:SetAttribute("State",        "wander")
+	model:SetAttribute("LeashRange",   spawnDef.leashRange or 15)
 
 	model.Parent = enemyFolder
 	enemies[id]  = model
@@ -435,7 +439,13 @@ function EnemyService._AILoop(id: string)
 			local m = enemies[id]
 			if not m or not m.Parent then break end
 
-			if not targetPlayer or dist > aggroRange * 1.5 then
+			-- Leash: if too far from spawn, drop aggro and return
+			local sx = m:GetAttribute("SpawnTileX")
+			local sz = m:GetAttribute("SpawnTileZ")
+			local leashRange = m:GetAttribute("LeashRange") or 15
+			if manhattan(cx, cz, sx, sz) > leashRange then
+				m:SetAttribute("State", "return")
+			elseif not targetPlayer or dist > aggroRange * 1.5 then
 				m:SetAttribute("State", "wander")
 				-- No wait — loop immediately
 			elseif dist == 1 then
@@ -474,7 +484,13 @@ function EnemyService._AILoop(id: string)
 			local m = enemies[id]
 			if not m or not m.Parent then break end
 
-			if not targetPlayer then
+			-- Leash: if too far from spawn, drop aggro and return
+			local sx = m:GetAttribute("SpawnTileX")
+			local sz = m:GetAttribute("SpawnTileZ")
+			local leashRange = m:GetAttribute("LeashRange") or 15
+			if manhattan(cx, cz, sx, sz) > leashRange then
+				m:SetAttribute("State", "return")
+			elseif not targetPlayer then
 				m:SetAttribute("State", "wander")
 				-- No wait — loop immediately
 			else
@@ -500,6 +516,26 @@ function EnemyService._AILoop(id: string)
 					task.wait(Config.ENEMY_ATTACK_INTERVAL)
 				end
 			end
+		elseif state == "return" then
+			local m = enemies[id]
+			if not m or not m.Parent then break end
+			local sx = m:GetAttribute("SpawnTileX")
+			local sz = m:GetAttribute("SpawnTileZ")
+			if cx == sx and cz == sz then
+				m:SetAttribute("State", "wander")
+			else
+				local function isPassableR(tx, tz)
+					return isPassableForEnemy(tx, tz, id)
+				end
+				local path = Pathfinder.FindPath(isPassableR, cx, cz, sx, sz, 300)
+				if path and #path > 0 then
+					moveEnemyToTile(m, path[1][1], path[1][2])
+				else
+					m:SetAttribute("State", "wander")
+				end
+				task.wait(Config.MOVE_TWEEN_TIME)
+			end
+
 		else
 			-- Unknown state: reset to wander
 			model:SetAttribute("State", "wander")
@@ -550,6 +586,34 @@ function EnemyService.DamageEnemy(id: string, amount: number, attacker: Player)
 	end
 end
 
+-- ─── Respawn tracking ─────────────────────────────────────────────────────────
+-- Each killed enemy queues a respawn in its zone after a delay.
+local RESPAWN_DELAY_MIN = 8   -- seconds
+local RESPAWN_DELAY_MAX = 15
+
+local function queueRespawn(zoneId: string)
+	task.delay(math.random(RESPAWN_DELAY_MIN, RESPAWN_DELAY_MAX), function()
+		if not ZoneData then return end
+		local zone = ZoneData.GetZone(zoneId)
+		if not zone or zone.safe then return end
+
+		-- Pick a random walkable tile in the zone
+		local ZoneService = require(script.Parent.ZoneService)
+		local tx, tz = ZoneService.GetRandomTileInZone(zoneId)
+		if tx and tz and not isTileOccupied(tx, tz) and not isPlayerTileOccupied(tx, tz) then
+			local spawnPool = ZoneData.BuildSpawnPool(zone)
+			local entry = ZoneData.PickEnemy(zone, spawnPool)
+			EnemyService.Spawn({
+				name        = entry.name,
+				tx          = tx,
+				tz          = tz,
+				wanderRange = entry.wanderRange,
+				aggroRange  = entry.aggroRange,
+			})
+		end
+	end)
+end
+
 -- ─── Kill ─────────────────────────────────────────────────────────────────────
 function EnemyService._Kill(id: string, killer: Player?)
 	local model = enemies[id]
@@ -562,8 +626,6 @@ function EnemyService._Kill(id: string, killer: Player?)
 	local movingX = model:GetAttribute("MovingToTileX")
 	local movingZ = model:GetAttribute("MovingToTileZ")
 
-	-- FIX: release current tile unconditionally; only release the moving
-	-- tile if it differs from current (tween may have already cleared it).
 	releaseTile(dtx, dtz, id)
 	if movingX and movingZ and (movingX ~= dtx or movingZ ~= dtz) then
 		releaseTile(movingX, movingZ, id)
@@ -578,6 +640,12 @@ function EnemyService._Kill(id: string, killer: Player?)
 	LootService.Drop(model, killer)
 	local KillTracker = require(script.Parent.KillTrackerService)
 	KillTracker.RegisterKill(killer, model:GetAttribute("EnemyName"))
+
+	-- Queue a respawn in this enemy's zone
+	local zoneId = TileGrid.GetZone(dtx, dtz)
+	if zoneId then
+		queueRespawn(zoneId)
+	end
 
 	task.delay(0.5, function()
 		if model and model.Parent then model:Destroy() end
@@ -635,13 +703,80 @@ do
 		enemyFolder.Parent = map
 	end
 
+	-- Zone-based spawning: fill each non-safe zone with enemies
 	task.defer(function()
-		task.wait(2)
-		EnemyService.Spawn({ name = "Noobini Pizzanini",    tx = 10, tz = 10, wanderRange = 5 })
-		EnemyService.Spawn({ name = "Noobini Pizzanini",    tx = 14, tz = 10, wanderRange = 5 })
-		EnemyService.Spawn({ name = "Lirili Larila",        tx = 18, tz = 12, wanderRange = 6 })
-		EnemyService.Spawn({ name = "Trippi Troppi",        tx = 22, tz = 15, wanderRange = 4, aggroRange = 8 })
-		EnemyService.Spawn({ name = "Cappuccino Assassino", tx = 30, tz = 20, wanderRange = 3, aggroRange = 7 })
+		task.wait(3) -- wait for TileGrid to finish generating
+
+		local spawnX = Config.GRID_WIDTH  / 2
+		local spawnZ = Config.GRID_HEIGHT / 2
+
+		for _, zone in ipairs(ZoneData.ZONES) do
+			if not zone.safe and #zone.spawnEnemies > 0 then
+				local spawnPool = ZoneData.BuildSpawnPool(zone)
+				-- Count walkable tiles in this zone to determine density
+				local walkableCount = 0
+				local zoneCx = spawnX + zone.center.x
+				local zoneCz = spawnZ + zone.center.z
+				local scanR  = zone.radius + 10
+				for tx = math.max(1, math.floor(zoneCx - scanR)), math.min(Config.GRID_WIDTH, math.ceil(zoneCx + scanR)) do
+					for tz = math.max(1, math.floor(zoneCz - scanR)), math.min(Config.GRID_HEIGHT, math.ceil(zoneCz + scanR)) do
+						if TileGrid.IsWalkable(tx, tz) and TileGrid.GetZone(tx, tz) == zone.id then
+							walkableCount += 1
+						end
+					end
+				end
+
+				local density = zone.spawnDensity or 0.01
+				local spawnCount = math.clamp(math.floor(walkableCount * density), 5, 80)
+				print(string.format("[EnemyService] Spawning %d enemies in %s (%d walkable tiles, density %.3f)",
+					spawnCount, zone.name, walkableCount, density))
+
+				for _ = 1, spawnCount do
+					local tx, tz = nil, nil
+					-- Try random positions within zone radius, fallback to scan
+					for attempt = 1, 30 do
+						local angle = math.random() * math.pi * 2
+						local r = math.random(0, math.floor(zone.radius * 0.9))
+						local cx = math.floor(zoneCx + math.cos(angle) * r)
+						local cz = math.floor(zoneCz + math.sin(angle) * r)
+						if TileGrid.IsWalkable(cx, cz)
+							and TileGrid.GetZone(cx, cz) == zone.id
+							and not isTileOccupied(cx, cz)
+							and not isPlayerTileOccupied(cx, cz) then
+							tx, tz = cx, cz
+							break
+						end
+					end
+					-- Fallback: full scan around zone centre
+					if not tx then
+						for scanTx = math.max(1, math.floor(zoneCx - scanR)), math.min(Config.GRID_WIDTH, math.ceil(zoneCx + scanR)) do
+							for scanTz = math.max(1, math.floor(zoneCz - scanR)), math.min(Config.GRID_HEIGHT, math.ceil(zoneCz + scanR)) do
+								if TileGrid.IsWalkable(scanTx, scanTz)
+									and TileGrid.GetZone(scanTx, scanTz) == zone.id
+									and not isTileOccupied(scanTx, scanTz)
+									and not isPlayerTileOccupied(scanTx, scanTz) then
+									tx, tz = scanTx, scanTz
+									break
+								end
+							end
+							if tx then break end
+						end
+					end
+
+					if tx and tz then
+						local entry = ZoneData.PickEnemy(zone, spawnPool)
+						EnemyService.Spawn({
+							name        = entry.name,
+							tx          = tx,
+							tz          = tz,
+							wanderRange = entry.wanderRange,
+							aggroRange  = entry.aggroRange,
+							leashRange  = zone.leashRange or 15,
+						})
+					end
+				end
+			end
+		end
 	end)
 
 	print("[EnemyService] Ready.")

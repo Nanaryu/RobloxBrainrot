@@ -41,6 +41,17 @@ local function newItemId(): string
 	return "I" .. nextItemId
 end
 
+local function refreshIdCounter()
+	for _, inv in pairs(inventories) do
+		for id in pairs(inv) do
+			local num = tonumber(id:match("^I(%d+)$"))
+			if num and num >= nextItemId then
+				nextItemId = num + 1
+			end
+		end
+	end
+end
+
 -- ─── Rarity → drop chance ─────────────────────────────────────────────────────
 local DROP_CHANCE = {
 	Common    = 0.25,
@@ -116,7 +127,7 @@ for _, r in ipairs(Config.RARITIES) do
 end
 
 -- ─── World drop state ─────────────────────────────────────────────────────────
-local PICKUP_RANGE = 1
+local PICKUP_RANGE = 0 -- must be on exact same tile
 local BOB_HEIGHT   = 0.6
 local BOB_PERIOD   = 1.4
 
@@ -283,13 +294,29 @@ function LootService.GetInventory(player: Player): { table }
 	return serialized
 end
 
--- ─── DataStore save helper ────────────────────────────────────────────────────
-local function saveInventory(player: Player)
-	local inv = inventories[player.UserId]
-	if not inv then return end
-	pcall(function()
-		inventoryStore:SetAsync(tostring(player.UserId), inv)
+-- ─── Deferred save (stagger writes, avoid DataStore budget spike) ─────────────
+local pendingSaves = {} -- userId → snapshot data
+
+local function scheduleSave(userId: number, data: table)
+	pendingSaves[userId] = data
+	task.delay(1.5, function()
+		if pendingSaves[userId] then
+			pcall(function()
+				inventoryStore:SetAsync(tostring(userId), data)
+			end)
+			pendingSaves[userId] = nil
+		end
 	end)
+end
+
+local function flushSaves()
+	local toSave = pendingSaves
+	pendingSaves = {}
+	for userId, data in pairs(toSave) do
+		pcall(function()
+			inventoryStore:SetAsync(tostring(userId), data)
+		end)
+	end
 end
 
 -- ─── Player lifecycle ─────────────────────────────────────────────────────────
@@ -302,18 +329,19 @@ Players.PlayerAdded:Connect(function(player)
 	else
 		inventories[player.UserId] = {}
 	end
+	refreshIdCounter()
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-	saveInventory(player)
+	local inv = inventories[player.UserId]
 	inventories[player.UserId] = nil
+	if not inv then return end
+	scheduleSave(player.UserId, inv)
 end)
 
 -- Handle Studio stop button / server shutdown
 game:BindToClose(function()
-	for _, player in ipairs(Players:GetPlayers()) do
-		saveInventory(player)
-	end
+	flushSaves()
 end)
 
 -- Handle players already in-game (Studio play-solo)
@@ -327,6 +355,7 @@ for _, player in ipairs(Players:GetPlayers()) do
 		inventories[player.UserId] = {}
 	end
 end
+refreshIdCounter()
 
 -- ─── GetInventory RemoteFunction ──────────────────────────────────────────────
 local GetInventoryFn = Remotes:WaitForChild("GetInventory")

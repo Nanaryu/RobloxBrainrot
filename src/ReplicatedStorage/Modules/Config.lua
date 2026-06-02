@@ -6,8 +6,17 @@ local Config = {}
 -- ─── Tile Grid ────────────────────────────────────────────────────────────────
 Config.TILE_SIZE       = 8       -- studs per tile (width & depth)
 Config.TILE_HEIGHT     = 0.5     -- visual thickness of each tile part
-Config.GRID_WIDTH      = 64      -- number of tiles horizontally
-Config.GRID_HEIGHT     = 64      -- number of tiles vertically
+Config.GRID_WIDTH      = 256     -- number of tiles horizontally
+Config.GRID_HEIGHT     = 256     -- number of tiles vertically
+
+-- ─── Map Shape ────────────────────────────────────────────────────────────────
+-- Noise amplitude for zone boundaries (0 = perfect circles, 1 = very jagged)
+Config.MAP_NOISE_AMPLITUDE = 0.55
+-- Seed for deterministic noise (change for different map shapes)
+Config.MAP_NOISE_SEED      = 42
+
+-- ─── Town / Safe Zone ─────────────────────────────────────────────────────────
+Config.TOWN_RADIUS     = 12      -- tiles from spawn — hard safe boundary
 
 -- ─── Movement ─────────────────────────────────────────────────────────────────
 Config.MOVE_TWEEN_TIME = 0.18    -- seconds to slide between tiles
@@ -15,7 +24,7 @@ Config.MOVE_TWEEN_TIME = 0.18    -- seconds to slide between tiles
 -- ─── Camera ───────────────────────────────────────────────────────────────────
 Config.CAM_DISTANCE         = 40       -- studs from character
 Config.CAM_HORIZONTAL_ANGLE = 45       -- degrees, rotated around Y axis
-Config.CAM_VERTICAL_ANGLE   = 40       -- degrees, tilt down (35 = true iso, 40 = RPG feel)
+Config.CAM_VERTICAL_ANGLE   = 56       -- degrees, tilt down (higher = more top-down, better click range)
 Config.CAM_LERP             = 0.15     -- follow smoothing (0 = instant, higher = more lag)
 
 -- ─── Combat ───────────────────────────────────────────────────────────────────
@@ -24,6 +33,9 @@ Config.AUTO_ATTACK_INTERVAL= 1.0 -- seconds between player attacks
 Config.ENEMY_ATTACK_INTERVAL= 1.5
 Config.SOUND_HIT_ID        = ""  -- placeholder: set to rbxassetid://... for player hit SFX
 Config.SOUND_DAMAGE_ID     = ""  -- placeholder: set to rbxassetid://... for player takes damage SFX
+
+-- ─── Click Limit ──────────────────────────────────────────────────────────────
+Config.MAX_CLICK_DISTANCE  = 25  -- max Manhattan distance for click-to-move
 
 -- ─── Item Rarities ────────────────────────────────────────────────────────────
 -- Order = weakest → strongest. Used for reroll math and display colour.

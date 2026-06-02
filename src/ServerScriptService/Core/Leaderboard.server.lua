@@ -2,6 +2,7 @@
 -- FIX: raw numbers are stored in DataStore; format() is called only at
 -- display time. Previously formatted strings like "1.2K" were being saved,
 -- which caused format() to error on reload and corrupt the values.
+-- Uses a single DataStore key per player (table with level + coins).
 
 local DataStoreService = game:GetService("DataStoreService")
 local Players          = game:GetService("Players")
@@ -36,7 +37,6 @@ local SUFFIXES = {
 }
 
 local function format(number)
-	-- Guard: ensure we have an actual number (DataStore may return nil on first load)
 	if type(number) ~= "number" then return "0" end
 	if number < 1000 then return tostring(math.floor(number)) end
 
@@ -48,40 +48,28 @@ local function format(number)
 	return string.format("%.1f%s", value, SUFFIXES[tier + 1][1])
 end
 
--- ─── Raw stat table per player: userId → { level, kills, coins } ──────────────
--- We keep raw numbers here so we can save them correctly and also update
--- the display value on the leaderstats NumberValues at any time.
+-- ─── Raw stat table per player: userId → { level, coins } ────────────────────
 local rawStats = {}
 
 local function getRaw(userId)
 	if not rawStats[userId] then
-		rawStats[userId] = { level = 1, kills = 0, coins = 0 }
+		rawStats[userId] = { level = 1, coins = 0 }
 	end
 	return rawStats[userId]
 end
 
--- Push formatted display values to leaderstats (called after any change)
+-- Push display values to leaderstats
 local function refreshDisplay(player: Player)
-	local raw = getRaw(player.UserId)
-	if not player.leaderstats then return end
-	-- NumberValues store numbers; the leaderboard uses .Value which Roblox
-	-- shows as a string in the tab UI. We keep raw numbers in the Value so
-	-- other scripts can do arithmetic, and rely on format() only for labels
-	-- where we control the display ourselves (e.g. a custom GUI).
-	-- For the default Roblox leaderboard we just store the raw number.
+	local raw = rawStats[player.UserId]
+	if not raw or not player.leaderstats then return end
 	player.leaderstats.Level.Value = raw.level
-	-- Kills intentionally excluded — owned by KillTrackerService
 	player.leaderstats.Coins.Value = raw.coins
 end
 
 -- ─── Public helpers (called by other services) ────────────────────────────────
--- These allow CombatService / EnemyService / etc. to increment stats.
-
 local Leaderboard = {}
 
 function Leaderboard.AddKill(player: Player, amount: number)
-	-- Kill counting is handled by KillTrackerService.
-	-- This is kept for API compatibility but does nothing.
 end
 
 function Leaderboard.AddCoins(player: Player, amount: number)
@@ -96,7 +84,6 @@ function Leaderboard.SetLevel(player: Player, level: number)
 	refreshDisplay(player)
 end
 
--- ─── Format helper exposed for any UI that wants pretty numbers ───────────────
 Leaderboard.Format = format
 
 -- ─── Player added ─────────────────────────────────────────────────────────────
@@ -120,36 +107,68 @@ Players.PlayerAdded:Connect(function(player)
 	coinsVal.Value         = 0
 	coinsVal.Parent        = leaderstats
 
-	-- Load from DataStore (raw numbers only)
 	local raw = getRaw(player.UserId)
+
+	-- Try new single-key format first
 	local ok, result = pcall(function()
-		return {
-			level = data:GetAsync(player.UserId .. "-Level"),
-			kills = data:GetAsync(player.UserId .. "-Kills"),
-			coins = data:GetAsync(player.UserId .. "-Coins"),
-		}
+		return data:GetAsync(tostring(player.UserId))
 	end)
-	if ok and result then
-		-- GetAsync may return a formatted string from before this fix;
-		-- tonumber() converts both "1.2K" (returns nil → falls back to 0)
-		-- and 1200 (returns 1200) safely.
+
+	if ok and type(result) == "table" then
 		raw.level = tonumber(result.level) or 1
-		raw.kills = 0  -- KillTrackerService will set this via leaderstats.Kills.Value directly
 		raw.coins = tonumber(result.coins) or 0
+	else
+		-- Fall back to legacy separate keys
+		local ok2, result2 = pcall(function()
+			return {
+				level = data:GetAsync(player.UserId .. "-Level"),
+				coins = data:GetAsync(player.UserId .. "-Coins"),
+			}
+		end)
+		if ok2 and type(result2) == "table" then
+			raw.level = tonumber(result2.level) or 1
+			raw.coins = tonumber(result2.coins) or 0
+		end
 	end
 
 	refreshDisplay(player)
 end)
 
+-- ─── Deferred save (single key per player) ───────────────────────────────────
+local pendingSaves = {}
+
+local function scheduleSave(userId: number, raw: table)
+	pendingSaves[userId] = { level = raw.level, coins = raw.coins }
+	task.delay(0.2, function()
+		if pendingSaves[userId] then
+			pcall(function()
+				data:SetAsync(tostring(userId), pendingSaves[userId])
+			end)
+			pendingSaves[userId] = nil
+		end
+	end)
+end
+
+local function flushSaves()
+	local toSave = pendingSaves
+	pendingSaves = {}
+	for userId, snap in pairs(toSave) do
+		pcall(function()
+			data:SetAsync(tostring(userId), snap)
+		end)
+	end
+end
+
 -- ─── Player removing ──────────────────────────────────────────────────────────
 Players.PlayerRemoving:Connect(function(player)
-	local raw = getRaw(player.UserId)
-	pcall(function()
-		data:SetAsync(player.UserId .. "-Level", raw.level)
-		-- Kills intentionally excluded — saved by KillTrackerService
-		data:SetAsync(player.UserId .. "-Coins", raw.coins)
-	end)
+	local raw = rawStats[player.UserId]
 	rawStats[player.UserId] = nil
+	if not raw then return end
+	scheduleSave(player.UserId, raw)
+end)
+
+game:BindToClose(function()
+	flushSaves()
 end)
 
 return Leaderboard
