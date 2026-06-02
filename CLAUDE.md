@@ -140,8 +140,8 @@ StarterGui/
 - Client: click enemy → yellow `SelectionBox` → walk → auto-attack loop; Escape cancels
 - Client: faces enemy during attack; red screen flash on taking damage; pointer cursor on hover
 - Client: receives `EnemyHPUpdate` and refreshes billboard HP bar
-- Server: validates Manhattan == 1 per `RequestAttack`; flat 10 dmg placeholder
-- Server: per-player attack loop with `AUTO_ATTACK_INTERVAL` throttle
+- Server: per-player auto-attack loop at `AUTO_ATTACK_INTERVAL`; damage = `10 + GetAttackBonus()` ±10%, grants 2 Attack XP per hit
+- Equipment stat not yet factored in (pending inventory/equip system)
 - Dead players blocked from movement and combat (client + server)
 
 ### ✅ Skills (Skills.lua + SkillService.lua)
