@@ -1,98 +1,157 @@
-local dataStore = game:GetService("DataStoreService")
-local data = dataStore:GetDataStore("Stats")
+-- ServerScriptService/Core/Leaderboard.server.lua
+-- FIX: raw numbers are stored in DataStore; format() is called only at
+-- display time. Previously formatted strings like "1.2K" were being saved,
+-- which caused format() to error on reload and corrupt the values.
 
-local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local Players          = game:GetService("Players")
+
+local data = DataStoreService:GetDataStore("Stats")
+
+-- ─── Number formatter ─────────────────────────────────────────────────────────
+local SUFFIXES = {
+	{ "",     1        },
+	{ "K",    1e3      },
+	{ "M",    1e6      },
+	{ "B",    1e9      },
+	{ "T",    1e12     },
+	{ "Qa",   1e15     },
+	{ "Qn",   1e18     },
+	{ "Sx",   1e21     },
+	{ "Sp",   1e24     },
+	{ "Oc",   1e27     },
+	{ "No",   1e30     },
+	{ "Dc",   1e33     },
+	{ "Ud",   1e36     },
+	{ "Dd",   1e39     },
+	{ "Td",   1e42     },
+	{ "Qad",  1e45     },
+	{ "Qid",  1e48     },
+	{ "Sxd",  1e51     },
+	{ "Spd",  1e54     },
+	{ "Ocd",  1e57     },
+	{ "Nod",  1e60     },
+	{ "Vg",   1e63     },
+	{ "C",    1e303    },
+}
 
 local function format(number)
-	local suffixes = {
-		{"",    1},      -- One
-		{"K",   1e3},    -- Thousand
-		{"M",   1e6},    -- Million
-		{"B",   1e9},    -- Billion
-		{"T",   1e12},   -- Trillion
-		{"Qa",  1e15},   -- Quadrillion
-		{"Qn",  1e18},   -- Quintillion
-		{"Sx",  1e21},   -- Sextillion
-		{"Sp",  1e24},   -- Septillion
-		{"Oc",  1e27},   -- Octillion
-		{"No",  1e30},   -- Nonillion
-		{"Dc",  1e33},   -- Decillion
-		{"Ud",  1e36},   -- Undecillion
-		{"Dd",  1e39},   -- Duodecillion
-		{"Td",  1e42},   -- Tredecillion
-		{"Qad", 1e45},   -- Quattuordecillion
-		{"Qid", 1e48},   -- Quindecillion
-		{"Sxd", 1e51},   -- Sexdecillion
-		{"Spd", 1e54},   -- Septendecillion
-		{"Ocd", 1e57},   -- Octodecillion
-		{"Nod", 1e60},   -- Novemdecillion
-		{"Vg",  1e63},   -- Vigintillion
-		{"Uvg", 1e66},   -- Unvigintillion
-		{"Dvg", 1e69},   -- Duovigintillion
-		{"Tvg", 1e72},   -- Trevigintillion
-		{"Qavg",1e75},   -- Quattuorvigintillion
-		{"Qivg",1e78},   -- Quinvigintillion
-		{"Sxvg",1e81},   -- Sexvigintillion
-		{"Spvg",1e84},   -- Septenvigintillion
-		{"Ocvg",1e87},   -- Octovigintillion
-		{"Novg",1e90},   -- Novemvigintillion
-		{"C",   1e303}   -- Centillion
-	}
-    if number < 1000 then
-        return tostring(math.floor(number))
-    end
+	-- Guard: ensure we have an actual number (DataStore may return nil on first load)
+	if type(number) ~= "number" then return "0" end
+	if number < 1000 then return tostring(math.floor(number)) end
 
-    local tier = math.floor(math.log10(number) / 3)
+	local tier = math.floor(math.log10(number) / 3)
+	if tier > #SUFFIXES - 1 then tier = #SUFFIXES - 1 end
 
-    if tier > #suffixes - 1 then
-        tier = #suffixes - 1
-    end
-
-    local scale = 10^(tier * 3)
-    local value = number / scale
-
-    return string.format("%.1f%s", value, suffixes[tier + 1])
+	local scale = 10 ^ (tier * 3)
+	local value = number / scale
+	return string.format("%.1f%s", value, SUFFIXES[tier + 1][1])
 end
 
+-- ─── Raw stat table per player: userId → { level, kills, coins } ──────────────
+-- We keep raw numbers here so we can save them correctly and also update
+-- the display value on the leaderstats NumberValues at any time.
+local rawStats = {}
 
+local function getRaw(userId)
+	if not rawStats[userId] then
+		rawStats[userId] = { level = 1, kills = 0, coins = 0 }
+	end
+	return rawStats[userId]
+end
 
+-- Push formatted display values to leaderstats (called after any change)
+local function refreshDisplay(player: Player)
+	local raw = getRaw(player.UserId)
+	if not player.leaderstats then return end
+	-- NumberValues store numbers; the leaderboard uses .Value which Roblox
+	-- shows as a string in the tab UI. We keep raw numbers in the Value so
+	-- other scripts can do arithmetic, and rely on format() only for labels
+	-- where we control the display ourselves (e.g. a custom GUI).
+	-- For the default Roblox leaderboard we just store the raw number.
+	player.leaderstats.Level.Value = raw.level
+	player.leaderstats.Kills.Value = raw.kills
+	player.leaderstats.Coins.Value = raw.coins
+end
+
+-- ─── Public helpers (called by other services) ────────────────────────────────
+-- These allow CombatService / EnemyService / etc. to increment stats.
+
+local Leaderboard = {}
+
+function Leaderboard.AddKill(player: Player, amount: number)
+	local raw = getRaw(player.UserId)
+	raw.kills += (amount or 1)
+	refreshDisplay(player)
+end
+
+function Leaderboard.AddCoins(player: Player, amount: number)
+	local raw = getRaw(player.UserId)
+	raw.coins += (amount or 0)
+	refreshDisplay(player)
+end
+
+function Leaderboard.SetLevel(player: Player, level: number)
+	local raw = getRaw(player.UserId)
+	raw.level = level
+	refreshDisplay(player)
+end
+
+-- ─── Format helper exposed for any UI that wants pretty numbers ───────────────
+Leaderboard.Format = format
+
+-- ─── Player added ─────────────────────────────────────────────────────────────
 Players.PlayerAdded:Connect(function(player)
-    local leaderstats = Instance.new("Folder")
-    leaderstats.Name = "leaderstats"
-    leaderstats.Parent = player
+	local leaderstats      = Instance.new("Folder")
+	leaderstats.Name       = "leaderstats"
+	leaderstats.Parent     = player
 
-    local level = Instance.new("NumberValue")
-    level.Name = "Level"
-    level.Parent = leaderstats
+	local levelVal         = Instance.new("NumberValue")
+	levelVal.Name          = "Level"
+	levelVal.Value         = 1
+	levelVal.Parent        = leaderstats
 
-    local PlayerLevel = data:GetAsync(player.UserId.."-Level")
-    if PlayerLevel ~= nil then
-        player.leaderstats.Level.Value = format(PlayerLevel)
-    end
+	local killsVal         = Instance.new("NumberValue")
+	killsVal.Name          = "Kills"
+	killsVal.Value         = 0
+	killsVal.Parent        = leaderstats
 
-    local kills = Instance.new("NumberValue")
-    kills.Name = "Kills"
-    kills.Parent = leaderstats
+	local coinsVal         = Instance.new("NumberValue")
+	coinsVal.Name          = "Coins"
+	coinsVal.Value         = 0
+	coinsVal.Parent        = leaderstats
 
-    local PlayerKills = data:GetAsync(player.UserId.."-Kills")
-    if PlayerKills ~= nil then
-        player.leaderstats.Kills.Value = format(PlayerKills)
-    end
+	-- Load from DataStore (raw numbers only)
+	local raw = getRaw(player.UserId)
+	local ok, result = pcall(function()
+		return {
+			level = data:GetAsync(player.UserId .. "-Level"),
+			kills = data:GetAsync(player.UserId .. "-Kills"),
+			coins = data:GetAsync(player.UserId .. "-Coins"),
+		}
+	end)
+	if ok and result then
+		-- GetAsync may return a formatted string from before this fix;
+		-- tonumber() converts both "1.2K" (returns nil → falls back to 0)
+		-- and 1200 (returns 1200) safely.
+		raw.level = tonumber(result.level) or 1
+		raw.kills = tonumber(result.kills) or 0
+		raw.coins = tonumber(result.coins) or 0
+	end
 
-    local coins = Instance.new("NumberValue")
-    coins.Name = "Coins"
-    coins.Parent = leaderstats
-
-    local PlayerCoins = data:GetAsync(player.UserId.."-Coins")
-    if PlayerCoins ~= nil then
-        player.leaderstats.Coins.Value = format(PlayerCoins)
-    end
+	refreshDisplay(player)
 end)
 
+-- ─── Player removing ──────────────────────────────────────────────────────────
 Players.PlayerRemoving:Connect(function(player)
-    local success, errorMsg = pcall(function()
-        data:SetAsync(player.UserId.."-Level", player.leaderstats.Level.Value)
-        data:SetAsync(player.UserId.."-Kills", player.leaderstats.Kills.Value)
-        data:SetAsync(player.UserId.."-Coins", player.leaderstats.Coins.Value)
-    end)
+	local raw = getRaw(player.UserId)
+	-- Save raw numbers, never formatted strings
+	pcall(function()
+		data:SetAsync(player.UserId .. "-Level", raw.level)
+		data:SetAsync(player.UserId .. "-Kills", raw.kills)
+		data:SetAsync(player.UserId .. "-Coins", raw.coins)
+	end)
+	rawStats[player.UserId] = nil
 end)
+
+return Leaderboard
