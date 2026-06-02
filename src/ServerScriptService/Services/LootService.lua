@@ -6,10 +6,12 @@
 --   4. Spawn a glowing Part in the world at the death position.
 --   5. Fire ItemDropped → all nearby clients (visual beacon).
 --   6. When a player walks onto the tile, auto-pickup → InventoryUpdated → client.
+--   7. Inventory persisted to "Inventory_v1" DataStore.
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService      = game:GetService("TweenService")
+local DataStoreService  = game:GetService("DataStoreService")
 
 local Config   = require(ReplicatedStorage.Modules.Config)
 local ItemData = require(ReplicatedStorage.Modules.ItemData)
@@ -17,6 +19,8 @@ local ItemData = require(ReplicatedStorage.Modules.ItemData)
 local Remotes          = ReplicatedStorage:WaitForChild("Remotes")
 local ItemDropped      = Remotes:WaitForChild("ItemDropped")
 local InventoryUpdated = Remotes:WaitForChild("InventoryUpdated")
+
+local inventoryStore = DataStoreService:GetDataStore("Inventory_v1")
 
 local LootService = {}
 
@@ -136,8 +140,6 @@ local function spawnWorldDrop(item: table, worldPos: Vector3, tx: number, tz: nu
 	part.CFrame           = CFrame.new(worldPos + Vector3.new(0, 1.5, 0))
 	part.Parent           = lootFolder
 
-	-- FIX: removed the leaked Heartbeat connection (bobConn).
-	-- The task.spawn loop is sufficient on its own.
 	local baseY = worldPos.Y + 1.5
 	task.spawn(function()
 		local up = true
@@ -190,12 +192,10 @@ local function giveItem(player: Player, item: table)
 	InventoryUpdated:FireClient(player, serialized)
 end
 
--- ─── Remove world drop (returns the drop data or nil if already gone) ─────────
+-- ─── Remove world drop ────────────────────────────────────────────────────────
 local function removeWorldDrop(itemId: string)
 	local drop = worldDrops[itemId]
 	if not drop then return nil end
-	-- FIX: nil the entry atomically BEFORE any yield so a second
-	-- iteration of the pickup loop cannot also claim this item.
 	worldDrops[itemId] = nil
 	if drop.part and drop.part.Parent then
 		drop.part:Destroy()
@@ -216,14 +216,12 @@ task.spawn(function()
 		end
 		if not MovementService then continue end
 
-		-- Snapshot keys so mutations mid-loop don't cause issues
 		local ids = {}
 		for itemId in pairs(worldDrops) do
 			table.insert(ids, itemId)
 		end
 
 		for _, itemId in ipairs(ids) do
-			-- FIX: re-check after snapshot; another iteration may have removed it
 			local drop = worldDrops[itemId]
 			if not drop then continue end
 
@@ -232,7 +230,6 @@ task.spawn(function()
 				if ptx then
 					local dist = math.abs(ptx - drop.tileX) + math.abs(ptz - drop.tileZ)
 					if dist <= PICKUP_RANGE then
-						-- Atomically remove; if nil was returned, someone else got it
 						local claimed = removeWorldDrop(itemId)
 						if claimed then
 							giveItem(player, claimed.item)
@@ -286,15 +283,49 @@ function LootService.GetInventory(player: Player): { table }
 	return serialized
 end
 
+-- ─── DataStore save helper ────────────────────────────────────────────────────
+local function saveInventory(player: Player)
+	local inv = inventories[player.UserId]
+	if not inv then return end
+	pcall(function()
+		inventoryStore:SetAsync(tostring(player.UserId), inv)
+	end)
+end
+
 -- ─── Player lifecycle ─────────────────────────────────────────────────────────
 Players.PlayerAdded:Connect(function(player)
-	inventories[player.UserId] = {}
+	local ok, result = pcall(function()
+		return inventoryStore:GetAsync(tostring(player.UserId))
+	end)
+	if ok and type(result) == "table" then
+		inventories[player.UserId] = result
+	else
+		inventories[player.UserId] = {}
+	end
 end)
+
 Players.PlayerRemoving:Connect(function(player)
+	saveInventory(player)
 	inventories[player.UserId] = nil
 end)
+
+-- Handle Studio stop button / server shutdown
+game:BindToClose(function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		saveInventory(player)
+	end
+end)
+
+-- Handle players already in-game (Studio play-solo)
 for _, player in ipairs(Players:GetPlayers()) do
-	inventories[player.UserId] = {}
+	local ok, result = pcall(function()
+		return inventoryStore:GetAsync(tostring(player.UserId))
+	end)
+	if ok and type(result) == "table" then
+		inventories[player.UserId] = result
+	else
+		inventories[player.UserId] = {}
+	end
 end
 
 -- ─── GetInventory RemoteFunction ──────────────────────────────────────────────

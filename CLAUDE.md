@@ -30,13 +30,14 @@ BrainrotRPG/
     ├── ServerScriptService/
     │   ├── Core/
     │   │   ├── RemotesInit.server.lua        ✅  canonical remote creation
-    │   │   ├── Main.server.lua               ✅  boots all services in order
-    │   │   └── Leaderboard.server.lua        ✅  Level/Kills/Coins with DataStore
+    │   │   ├── Main.server.lua               ✅  boots all services in dependency order
+    │   │   └── Leaderboard.server.lua        ✅  Level/Coins with DataStore; Kills owned by KillTrackerService
     │   └── Services/
     │       ├── TileGridService.lua           ✅
     │       ├── MovementService.lua           ✅
     │       ├── SkillService.lua              ✅  Attack/Defense XP, level-up, SkillUpdated remote
-    │       ├── EnemyService.lua              ✅
+    │       ├── EnemyService.lua              ✅  calls KillTrackerService.RegisterKill on _Kill
+    │       ├── KillTrackerService.lua        ✅  per-enemy + global kills, "KillTracker_v1" DataStore
     │       ├── LootService.lua               ✅  drop rolls, world items, auto-pickup, inventory
     │       └── CombatService.lua             ✅
     └── StarterPlayer/
@@ -45,20 +46,19 @@ BrainrotRPG/
             ├── MovementController.lua        ✅  canonical movement (no .client. suffix)
             ├── CombatController.client.lua   ✅
             ├── HUDController.client.lua      ✅  HP bar + Attack/Defense skill bars
-            ├── IsoCamera.client.lua          ✅  (correct location)
-            └── DamageNumbers.client.lua      ✅  floating damage numbers over enemies/player
+            ├── IsoCamera.client.lua          ✅
+            ├── DamageNumbers.client.lua      ✅  floating damage numbers
+            └── InventoryController.client.lua ✅ dynamically generates InvSlot instances
 ```
 
 **Still needed:**
 ```
 ServerScriptService/Services/
     ShopService.lua
-    DataService.lua           (full inventory/equipment persistence; Leaderboard covers Level/Kills/Coins)
+    DataService.lua           (full inventory/equipment persistence)
 StarterPlayer/StarterPlayerScripts/
-    InventoryController.lua
     ShopClient.lua
 StarterGui/
-    InventoryGui
     ShopGui
 ```
 
@@ -123,7 +123,7 @@ StarterGui/
 
 ### ✅ A* Pathfinding (Pathfinder.lua)
 - Pure module, injected `isWalkable(tx,tz)` — no service deps
-- Manhattan heuristic, 4-directional; goal-aware tie-breaking for balanced routes
+- Manhattan heuristic, 4-directional; goal-aware tie-breaking
 - `maxNodes` cap (default 400); returns `{tx,tz}[]` start-exclusive
 
 ### ✅ Enemy System (EnemyService)
@@ -133,8 +133,15 @@ StarterGui/
 - **Elite system**: 5 % chance, 1–5 stars, HP/DMG multiplied per Config tables
 - **Overhead BillboardGui**: rarity-colored name (★ prefix) + green→red HP bar
 - `EnemyService.DamageEnemy(id, amount, player)`, `GetEnemy(id)`, `GetEnemyAtTile(tx, tz)`
-- `_DamagePlayer` applies `SkillService.GetDefenseReduction` and grants defense XP
-- Test spawns hardcoded in init block (tiles 10–30)
+- `_Kill` calls `KillTrackerService.RegisterKill(killer, enemyName)` and `LootService.Drop(model, killer)`
+
+### ✅ Kill Tracker (KillTrackerService)
+- `KillTrackerService.RegisterKill(player, enemyName)` — called from `EnemyService._Kill`
+- Tracks `_total` (global kills) + per-enemy counters keyed by enemy name string
+- Persists to `"KillTracker_v1"` DataStore (saves on every kill + PlayerRemoving)
+- On load: uses `player:WaitForChild("leaderstats")` then sets `Kills.Value = _total` — wins race vs Leaderboard
+- `GetKills(player, enemyName)` and `GetTotalKills(player)` exposed
+- **Leaderboard.server.lua** does NOT touch `Kills` in `refreshDisplay` or `PlayerRemoving` — KillTracker owns it entirely
 
 ### ✅ Combat (CombatService + CombatController)
 - Client: click enemy → yellow `SelectionBox` → walk → auto-attack loop; Escape cancels
@@ -145,52 +152,51 @@ StarterGui/
 - Dead players blocked from movement and combat (client + server)
 
 ### ✅ Skills (Skills.lua + SkillService.lua)
-
-**Skills.lua** (ReplicatedStorage/Modules — shared):
-- Constants: `Skills.ATTACK = "Attack"`, `Skills.DEFENSE = "Defense"`, `Skills.MAX_LEVEL = 99`
-- Pre-built `XP_TABLE[level]` — cumulative XP to reach each level; base 100 XP, ×1.35 scale per tier
-- `Skills.LevelFromXP(totalXP)` → level number
-- `Skills.XPProgress(totalXP)` → `(currentXP, neededXP)` within current level
-
-**SkillService.lua** (ServerScriptService/Services):
-- Per-player `skillData[userId]` table with `totalXP` for each skill; initialized on `PlayerAdded`
-- `GrantAttackXP(player, amount)` / `GrantDefenseXP(player, amount)` — 0.1s debounce prevents multi-grant per swing; prints level-up to console
-- `GetAttackBonus(player)` → `(level-1) * 0.5` flat ATK added to base damage
-- `GetDefenseReduction(player)` → `level / (level + 80)`, capped at 0.75 (≈55% at lvl 99)
-- Fires `SkillUpdated` remote after every grant with `{ Attack={level, currentXP, neededXP, totalXP}, Defense={…} }`
-- On `CharacterAdded` fires initial state after 0.5s so HUD populates on spawn
-
-**CombatService patch:** `doAttack` now calls `SkillService.GetAttackBonus(player)` to add to base 10 damage, and `SkillService.GrantAttackXP(player, 2)` on every hit.
+- Constants: `Skills.ATTACK`, `Skills.DEFENSE`, `Skills.MAX_LEVEL = 99`
+- Pre-built `XP_TABLE[level]` — cumulative XP; base 100 XP, ×1.35 scale per tier
+- `GrantAttackXP(player, amount)` / `GrantDefenseXP(player, amount)` — 0.1s debounce
+- `GetAttackBonus(player)` → `(level-1) * 0.5` flat ATK
+- `GetDefenseReduction(player)` → `level / (level + 80)`, capped at 0.75
+- Fires `SkillUpdated` after every grant with full payload for both skills
 
 ### ✅ Loot System (ItemData.lua + LootService.lua)
+- 50+ item templates across 6 slots (weapon, offhand, helmet, chest, legs, boots), all 7 rarities
+- Drop chain: `EnemyService._Kill` → `LootService.Drop` → world neon sphere in `Workspace/Map/Loot` → 0.3s pickup loop → `InventoryUpdated` remote
+- Auto-pickup within 1 tile (Manhattan); first player wins
+- In-memory `inventories[userId]`; `GetInventory` RemoteFunction wired
+- Elite star count bumps item rarity tier on drop
 
-**ItemData.lua** — 50+ item templates across 6 slots (weapon, offhand, helmet, chest, legs, boots) and all 7 rarities. Each template has `slot`, `statType` (atk/def), `rarity`, `statMin/Max`, `name`, `icon`. Pre-builds `_byRarity` lookup table for O(1) pool access.
-
-**LootService.lua:**
-- `LootService.Drop(model, killer)` — called from `EnemyService._Kill`; checks drop chance by enemy rarity (25–100%), picks item rarity via weighted table, bumps tier for elite stars, rolls stat in `[statMin, statMax]`, spawns world Part
-- World drops: neon glowing sphere with PointLight and BillboardGui name label, bobbing animation, parented under `Workspace/Map/Loot`
-- Auto-pickup: 0.3 s tick loop checks if any player is within 1 tile (Manhattan); first player wins the item
-- On pickup: adds to in-memory `inventories[userId]` table, fires `InventoryUpdated` → client with serialized list
-- `LootService.GetInventory(player)` exposed; `GetInventory` RemoteFunction wired
-- Player inventories cleared on `PlayerRemoving`; DataService will persist them later
-
-**EnemyService._Kill patch:** `LootService` lazy-loaded and `Drop(model, killer)` called where the TODO was.
+### ✅ Inventory UI (InventoryController.client.lua)
+- Listens to `InventoryUpdated` remote; calls `GetInventory` RemoteFunction on spawn
+- Clears and rebuilds `ScrollingFrame` inside `InventoryPanel > InventoryContainer` on every update
+- Clones `InvSlot` template for each item; sets `ItemIcon` ImageLabel + `ItemLabel` TextLabel
+- `UIStroke` colored by rarity; item data stored as slot Attributes for equip system later
+- Sorted by rarity ascending then name; canvas height adjusted for UIGridLayout
+- Placeholder icon: `rbxassetid://101140058690765`
+- Template slot children expected: `ItemIcon` (ImageLabel), `ItemLabel` (TextLabel)
 
 ### ✅ Floating Damage Numbers (DamageNumbers.client.lua)
-- Listens to `AttackResult` (damage we deal → white number over enemy) and `TakeDamage` (damage we take → red number over own character)
-- Spawns an invisible anchor Part at world position + random horizontal scatter, with a BillboardGui `AlwaysOnTop` label
-- Tweens anchor upward (`FLOAT_RISE = 5` studs over `0.9 s`); fades text out in the second half via delayed tween
-- Cleans up anchor + billboard on completion; no memory leak
+- `AttackResult` → white number over enemy; `TakeDamage` → red number over own character
+- Invisible anchor Part tweened upward 5 studs over 0.9s; label fades in second half
 
 ### ✅ HUD (HUDController.client.lua)
 - Bottom-left panel: HP bar, Attack skill bar, Defense skill bar
 - Reactive: `Humanoid.HealthChanged` for HP; `SkillUpdated` remote for skill bars
-- Color-interpolated HP fill (green → red); XP ratio fill for skills
+- Color-interpolated HP fill (green → red)
 
 ### ✅ Leaderboard (Leaderboard.server.lua)
-- `leaderstats`: Level, Kills, Coins — all persisted to DataStore
-- Large-number formatting with suffix table (K, M, B … up to Centillion)
-- Loads on `PlayerAdded`, saves on `PlayerRemoving`
+- `leaderstats`: Level, Kills, Coins
+- Level + Coins persisted in `"Stats"` DataStore; Kills excluded (owned by KillTrackerService)
+- `refreshDisplay` does NOT write `Kills.Value` — KillTracker sets it directly after WaitForChild
+- Large-number formatting with suffix table (K, M, B…)
+
+### ✅ Left Panel UI (LocalScript in LeftPanel)
+- Button hover: UIScale tween 1→1.1 (Back easing), icon rotation ±12°
+- Click/hover sounds via `UIClickSound` / `UIHoverSound`
+- Panel open: UIScale on panel root 0→1 (Back easing, 0.35s); close: instant Enabled=false
+- Toggle behaviour: clicking open panel closes it; clicking another switches
+- ExitButton inside each panel fires `closePanel`; gets same hover/sound treatment
+- Panels: StorePanel, IndexPanel, InventoryPanel, UpgradesPanel (all disabled by default)
 
 ---
 
@@ -260,12 +266,14 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [x] Screen flash on player taking damage
 - [x] Attack / Defense skill system with XP and level-ups
 - [x] Player HUD (HP bar, Attack XP bar, Defense XP bar)
-- [x] Leaderboard with DataStore (Level, Kills, Coins)
-- [x] Sound effect hooks (placeholder IDs)
-- [x] Death input lockout (movement + combat)
+- [x] Leaderboard with DataStore (Level, Coins)
+- [x] Kill tracking with DataStore persistence (per-enemy + global)
 - [x] Floating damage numbers
 - [x] Loot drops (ItemData + LootService)
-- [ ] Inventory system + UI
+- [x] Inventory UI (dynamic slot generation on item pickup)
+- [x] Left panel UI (hover anims, sounds, panel open/close)
+- [x] Sound effect hooks (placeholder IDs)
+- [x] Death input lockout (movement + combat)
 - [ ] Item equip system + player stat scaling
 - [ ] Item reroll UI
 - [ ] Full DataStore persistence (inventory, equipment)
@@ -282,7 +290,6 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [ ] Item slots (sword, staff, shield, helmet, chest, legs, boots?)
 - [ ] Player stat formula (ATK/DEF scaling with equipment)
 - [ ] Zone layout — which enemies spawn where
-- [ ] Floating damage number style
 - [ ] Respawn mechanic (timer? cost? safe zone?)
 - [ ] Premium currency final name (currently "Crystals")
 - [ ] Offline shop slot limit and duration tiers
@@ -290,13 +297,13 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 ---
 
 ## 🔑 Key Implementation Notes
-- Enemy defense reduction: `level / (level + 80)` capped at 0.75; `finalDamage = max(1, floor(amount*(1-reduction)))`
-- Attack bonus: `(level-1) * 0.5` flat, added in `doAttack` before the ±10% roll
-- Attack XP: 2 XP per hit (CombatService); Defense XP: 1 XP per hit taken (EnemyService._DamagePlayer); both debounced at 0.1s
-- `SkillUpdated` fires after every XP grant with full payload for both skills; also fires on CharacterAdded (0.5s delay) for HUD init
-- Leaderboard uses formatted suffixes (K/M/B…) — raw numbers stored in DataStore, formatted on display
-- `MovementBootstrap.client.lua` wraps `MovementController.lua` so it runs as a LocalScript without the `.client.` suffix
-- `Skills.lua` module in ReplicatedStorage/Modules defines `Skills.ATTACK` / `Skills.DEFENSE` string constants shared by server and client
-- Loot drop chain: `EnemyService._Kill` → `LootService.Drop(model, killer)` → world Part in `Workspace/Map/Loot` → 0.3s pickup loop → `InventoryUpdated` remote
-- Item stat is a single rolled integer (`stat`); `statType` is "atk" or "def" — equip system will apply it as a flat bonus
-- `ItemData._byRarity[rarityName]` is a pre-built array of template name strings for fast random picks
+- **Kill tracking ownership**: KillTrackerService is sole owner of kill counts. Leaderboard.server.lua does NOT write `Kills.Value` in `refreshDisplay` or save it in `PlayerRemoving`. KillTracker sets `leaderstats.Kills.Value` via `WaitForChild` after load to win the race condition.
+- **DataStores in use**: `"Stats"` (Level, Coins via Leaderboard), `"KillTracker_v1"` (kills via KillTrackerService), inventory TBD
+- Enemy defense reduction: `level / (level + 80)` capped at 0.75
+- Attack bonus: `(level-1) * 0.5` flat, added before ±10% roll
+- Attack XP: 2 per hit (CombatService); Defense XP: 1 per hit taken (EnemyService._DamagePlayer)
+- `SkillUpdated` fires after every XP grant + on CharacterAdded (0.5s delay) for HUD init
+- Loot drop chain: `EnemyService._Kill` → `KillTrackerService.RegisterKill` + `LootService.Drop` → world Part → pickup loop → `InventoryUpdated`
+- `ItemData._byRarity[rarityName]` pre-built array for fast random picks
+- Inventory slot template children must be named `ItemIcon` (ImageLabel) and `ItemLabel` (TextLabel)
+- Main.server.lua boot order: TileGrid → Movement → Skills → Enemy → KillTracker → Loot → Combat

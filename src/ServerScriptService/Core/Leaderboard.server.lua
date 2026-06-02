@@ -70,7 +70,7 @@ local function refreshDisplay(player: Player)
 	-- where we control the display ourselves (e.g. a custom GUI).
 	-- For the default Roblox leaderboard we just store the raw number.
 	player.leaderstats.Level.Value = raw.level
-	player.leaderstats.Kills.Value = raw.kills
+	-- Kills intentionally excluded — owned by KillTrackerService
 	player.leaderstats.Coins.Value = raw.coins
 end
 
@@ -80,9 +80,8 @@ end
 local Leaderboard = {}
 
 function Leaderboard.AddKill(player: Player, amount: number)
-	local raw = getRaw(player.UserId)
-	raw.kills += (amount or 1)
-	refreshDisplay(player)
+	-- Kill counting is handled by KillTrackerService.
+	-- This is kept for API compatibility but does nothing.
 end
 
 function Leaderboard.AddCoins(player: Player, amount: number)
@@ -135,7 +134,7 @@ Players.PlayerAdded:Connect(function(player)
 		-- tonumber() converts both "1.2K" (returns nil → falls back to 0)
 		-- and 1200 (returns 1200) safely.
 		raw.level = tonumber(result.level) or 1
-		raw.kills = tonumber(result.kills) or 0
+		raw.kills = 0  -- KillTrackerService will set this via leaderstats.Kills.Value directly
 		raw.coins = tonumber(result.coins) or 0
 	end
 
@@ -145,10 +144,9 @@ end)
 -- ─── Player removing ──────────────────────────────────────────────────────────
 Players.PlayerRemoving:Connect(function(player)
 	local raw = getRaw(player.UserId)
-	-- Save raw numbers, never formatted strings
 	pcall(function()
 		data:SetAsync(player.UserId .. "-Level", raw.level)
-		data:SetAsync(player.UserId .. "-Kills", raw.kills)
+		-- Kills intentionally excluded — saved by KillTrackerService
 		data:SetAsync(player.UserId .. "-Coins", raw.coins)
 	end)
 	rawStats[player.UserId] = nil

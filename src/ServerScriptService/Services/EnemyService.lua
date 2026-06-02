@@ -576,6 +576,8 @@ function EnemyService._Kill(id: string, killer: Player?)
 		LootService = require(script.Parent.LootService)
 	end
 	LootService.Drop(model, killer)
+	local KillTracker = require(script.Parent.KillTrackerService)
+	KillTracker.RegisterKill(killer, model:GetAttribute("EnemyName"))
 
 	task.delay(0.5, function()
 		if model and model.Parent then model:Destroy() end

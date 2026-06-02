@@ -16,10 +16,13 @@ local SkillService     = require(script.Parent.Parent.Services.SkillService)
 -- 4. Enemy AI depends on TileGrid + Movement + Skills (defense XP)
 local EnemyService     = require(script.Parent.Parent.Services.EnemyService)
 
--- 5. Loot depends on ItemData (shared) and EnemyService drop hook
+-- 5. Kill tracking depends on EnemyService (registers kills on death)
+local KillTrackerService = require(script.Parent.Parent.Services.KillTrackerService)
+
+-- 6. Loot depends on ItemData (shared) and EnemyService drop hook
 local LootService      = require(script.Parent.Parent.Services.LootService)
 
--- 6. Combat depends on Enemy + Movement + Skills (attack XP + multipliers)
+-- 7. Combat depends on Enemy + Movement + Skills (attack XP + multipliers)
 local CombatService    = require(script.Parent.Parent.Services.CombatService)
 
 print("[Main] All services loaded.")
