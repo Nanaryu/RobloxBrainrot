@@ -6,8 +6,8 @@ local Config = {}
 -- ─── Tile Grid ────────────────────────────────────────────────────────────────
 Config.TILE_SIZE       = 8       -- studs per tile (width & depth)
 Config.TILE_HEIGHT     = 0.5     -- visual thickness of each tile part
-Config.GRID_WIDTH      = 256     -- number of tiles horizontally
-Config.GRID_HEIGHT     = 256     -- number of tiles vertically
+Config.GRID_WIDTH      = 128     -- number of tiles horizontally
+Config.GRID_HEIGHT     = 128     -- number of tiles vertically
 
 -- ─── Map Shape ────────────────────────────────────────────────────────────────
 -- Noise amplitude for zone boundaries (0 = perfect circles, 1 = very jagged)
@@ -16,7 +16,7 @@ Config.MAP_NOISE_AMPLITUDE = 0.55
 Config.MAP_NOISE_SEED      = 42
 
 -- ─── Town / Safe Zone ─────────────────────────────────────────────────────────
-Config.TOWN_RADIUS     = 12      -- tiles from spawn — hard safe boundary
+Config.TOWN_RADIUS     = 10      -- tiles from spawn — hard safe boundary
 
 -- ─── Movement ─────────────────────────────────────────────────────────────────
 Config.MOVE_TWEEN_TIME = 0.35    -- base seconds to slide between tiles (enemies; player scales with level)
@@ -28,7 +28,7 @@ Config.CAM_VERTICAL_ANGLE   = 56       -- degrees, tilt down (higher = more top-
 Config.CAM_LERP             = 0.15     -- follow smoothing (0 = instant, higher = more lag)
 
 -- ─── Combat ───────────────────────────────────────────────────────────────────
-Config.BASE_ATK         = 10      -- base weapon attack (scales with equipment later)
+Config.BASE_ATK         = 15      -- base weapon attack (scales with equipment later)
 Config.PLAYER_SPEED_BASE= 0.35    -- tween time at level 1 (seconds per tile; lower = faster)
 Config.PLAYER_SPEED_MIN = 0.22    -- tween time at max level (quick reflexes endgame)
 Config.PLAYER_SPEED_LEVEL= 200    -- level at which player reaches max speed

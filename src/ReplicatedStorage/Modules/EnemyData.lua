@@ -7,40 +7,40 @@
 local EnemyData = {}
 
 -- ─── Common (tier 1) ─────────────────────────────────────────────────────────
-EnemyData["Noobini Pizzanini"]   = { tier=1, hp=30,   dmg=3,  defense=2,  speed=6,  xp=2,   gold={1,3},   lootRarity="Common"   }
-EnemyData["Lirili Larila"]       = { tier=1, hp=40,   dmg=4,  defense=3,  speed=6,  xp=3,   gold={2,4},   lootRarity="Common"   }
-EnemyData["TIM Cheese"]          = { tier=1, hp=55,   dmg=5,  defense=4,  speed=6,  xp=4,   gold={3,6},   lootRarity="Common"   }
-EnemyData["FluriFlura"]          = { tier=1, hp=65,   dmg=6,  defense=4,  speed=7,  xp=5,   gold={4,7},   lootRarity="Common"   }
-EnemyData["Talpa Di Fero"]       = { tier=1, hp=80,   dmg=7,  defense=5,  speed=7,  xp=6,   gold={5,9},   lootRarity="Common"   }
-EnemyData["Svinina Bombardino"]  = { tier=1, hp=90,   dmg=8,  defense=6,  speed=7,  xp=7,   gold={6,10},  lootRarity="Common"   }
-EnemyData["Pipi Kiwi"]           = { tier=1, hp=100,  dmg=9,  defense=6,  speed=7,  xp=8,   gold={7,12},  lootRarity="Common"   }
-EnemyData["Racooni Jandelini"]   = { tier=1, hp=95,   dmg=9,  defense=7,  speed=7,  xp=8,   gold={7,11},  lootRarity="Common"   }
-EnemyData["Pipi Corni"]          = { tier=1, hp=110,  dmg=10, defense=8,  speed=7,  xp=9,   gold={8,13},  lootRarity="Common"   }
+EnemyData["Noobini Pizzanini"]   = { tier=1, hp=30,   dmg=4,  defense=1,  speed=6,  xp=2,   gold={1,3},   lootRarity="Common"   }
+EnemyData["Lirili Larila"]       = { tier=1, hp=40,   dmg=5,  defense=2,  speed=6,  xp=3,   gold={2,4},   lootRarity="Common"   }
+EnemyData["TIM Cheese"]          = { tier=1, hp=55,   dmg=6,  defense=3,  speed=6,  xp=4,   gold={3,6},   lootRarity="Common"   }
+EnemyData["FluriFlura"]          = { tier=1, hp=65,   dmg=7,  defense=3,  speed=7,  xp=5,   gold={4,7},   lootRarity="Common"   }
+EnemyData["Talpa Di Fero"]       = { tier=1, hp=80,   dmg=8,  defense=4,  speed=7,  xp=6,   gold={5,9},   lootRarity="Common"   }
+EnemyData["Svinina Bombardino"]  = { tier=1, hp=90,   dmg=9,  defense=4,  speed=7,  xp=7,   gold={6,10},  lootRarity="Common"   }
+EnemyData["Pipi Kiwi"]           = { tier=1, hp=100,  dmg=10, defense=5,  speed=7,  xp=8,   gold={7,12},  lootRarity="Common"   }
+EnemyData["Racooni Jandelini"]   = { tier=1, hp=95,   dmg=10, defense=5,  speed=7,  xp=8,   gold={7,11},  lootRarity="Common"   }
+EnemyData["Pipi Corni"]          = { tier=1, hp=110,  dmg=12, defense=6,  speed=7,  xp=9,   gold={8,13},  lootRarity="Common"   }
 
 -- ─── Rare (tier 2) ───────────────────────────────────────────────────────────
-EnemyData["Trippi Troppi"]       = { tier=2, hp=150,  dmg=14, defense=12, speed=7,  xp=15,  gold={12,20}, lootRarity="Rare"     }
-EnemyData["Gangster Footera"]    = { tier=2, hp=200,  dmg=18, defense=14, speed=8,  xp=22,  gold={18,30}, lootRarity="Rare"     }
-EnemyData["Bandito Bobritto"]    = { tier=2, hp=220,  dmg=20, defense=15, speed=8,  xp=25,  gold={20,33}, lootRarity="Rare"     }
-EnemyData["Boneca Ambalabu"]     = { tier=2, hp=240,  dmg=22, defense=17, speed=8,  xp=28,  gold={22,36}, lootRarity="Rare"     }
-EnemyData["Cacto Hipopotamo"]    = { tier=2, hp=280,  dmg=25, defense=19, speed=7,  xp=33,  gold={25,40}, lootRarity="Rare"     }
-EnemyData["Ta Ta Ta Ta Sahur"]   = { tier=2, hp=300,  dmg=27, defense=20, speed=8,  xp=36,  gold={27,44}, lootRarity="Rare"     }
-EnemyData["Tric Trac Baraboom"]  = { tier=2, hp=340,  dmg=30, defense=22, speed=8,  xp=42,  gold={30,50}, lootRarity="Rare"     }
-EnemyData["Pipi Avocado"]        = { tier=2, hp=360,  dmg=32, defense=24, speed=8,  xp=45,  gold={32,52}, lootRarity="Rare"     }
-EnemyData["Frogo Elfo"]          = { tier=2, hp=350,  dmg=31, defense=25, speed=8,  xp=44,  gold={31,51}, lootRarity="Rare"     }
+EnemyData["Trippi Troppi"]       = { tier=2, hp=150,  dmg=14, defense=8,  speed=7,  xp=15,  gold={12,20}, lootRarity="Rare"     }
+EnemyData["Gangster Footera"]    = { tier=2, hp=200,  dmg=18, defense=10, speed=8,  xp=22,  gold={18,30}, lootRarity="Rare"     }
+EnemyData["Bandito Bobritto"]    = { tier=2, hp=220,  dmg=20, defense=11, speed=8,  xp=25,  gold={20,33}, lootRarity="Rare"     }
+EnemyData["Boneca Ambalabu"]     = { tier=2, hp=240,  dmg=22, defense=12, speed=8,  xp=28,  gold={22,36}, lootRarity="Rare"     }
+EnemyData["Cacto Hipopotamo"]    = { tier=2, hp=280,  dmg=25, defense=14, speed=7,  xp=33,  gold={25,40}, lootRarity="Rare"     }
+EnemyData["Ta Ta Ta Ta Sahur"]   = { tier=2, hp=300,  dmg=27, defense=15, speed=8,  xp=36,  gold={27,44}, lootRarity="Rare"     }
+EnemyData["Tric Trac Baraboom"]  = { tier=2, hp=340,  dmg=30, defense=16, speed=8,  xp=42,  gold={30,50}, lootRarity="Rare"     }
+EnemyData["Pipi Avocado"]        = { tier=2, hp=360,  dmg=32, defense=17, speed=8,  xp=45,  gold={32,52}, lootRarity="Rare"     }
+EnemyData["Frogo Elfo"]          = { tier=2, hp=350,  dmg=31, defense=18, speed=8,  xp=44,  gold={31,51}, lootRarity="Rare"     }
 
 -- ─── Epic (tier 3) ───────────────────────────────────────────────────────────
-EnemyData["Cappuccino Assassino"]            = { tier=3, hp=500,  dmg=45,  defense=35, speed=9,  xp=70,  gold={50,80},   lootRarity="Epic" }
-EnemyData["Brr Brr Patapim"]                = { tier=3, hp=650,  dmg=55,  defense=38, speed=9,  xp=90,  gold={65,100},  lootRarity="Epic" }
-EnemyData["Trulimero Trulicina"]             = { tier=3, hp=800,  dmg=65,  defense=40, speed=9,  xp=110, gold={80,120},  lootRarity="Epic" }
-EnemyData["Bambini Crostini"]               = { tier=3, hp=850,  dmg=68,  defense=42, speed=9,  xp=115, gold={85,130},  lootRarity="Epic" }
-EnemyData["Bananita Dolphinita"]            = { tier=3, hp=950,  dmg=75,  defense=45, speed=10, xp=130, gold={95,145},  lootRarity="Epic" }
-EnemyData["Perochello Lemonchello"]         = { tier=3, hp=1000, dmg=80,  defense=47, speed=10, xp=140, gold={100,155}, lootRarity="Epic" }
-EnemyData["Brri Brri Bicus Dicus Bombicus"] = { tier=3, hp=1100, dmg=88,  defense=50, speed=10, xp=155, gold={110,170}, lootRarity="Epic" }
-EnemyData["Avocadini Guffo"]                = { tier=3, hp=1300, dmg=100, defense=52, speed=10, xp=185, gold={130,200}, lootRarity="Epic" }
-EnemyData["Salamino Penguino"]              = { tier=3, hp=1500, dmg=115, defense=55, speed=10, xp=210, gold={150,230}, lootRarity="Epic" }
-EnemyData["Ti Ti Ti Sahur"]                 = { tier=3, hp=1400, dmg=108, defense=53, speed=10, xp=198, gold={140,215}, lootRarity="Epic" }
-EnemyData["Penguin Tree"]                   = { tier=3, hp=1600, dmg=120, defense=57, speed=10, xp=225, gold={160,245}, lootRarity="Epic" }
-EnemyData["Penguino Cocosino"]              = { tier=3, hp=1750, dmg=130, defense=60, speed=10, xp=245, gold={175,265}, lootRarity="Epic" }
+EnemyData["Cappuccino Assassino"]            = { tier=3, hp=500,  dmg=45,  defense=25, speed=9,  xp=70,  gold={50,80},   lootRarity="Epic" }
+EnemyData["Brr Brr Patapim"]                = { tier=3, hp=650,  dmg=55,  defense=27, speed=9,  xp=90,  gold={65,100},  lootRarity="Epic" }
+EnemyData["Trulimero Trulicina"]             = { tier=3, hp=800,  dmg=65,  defense=29, speed=9,  xp=110, gold={80,120},  lootRarity="Epic" }
+EnemyData["Bambini Crostini"]               = { tier=3, hp=850,  dmg=68,  defense=30, speed=9,  xp=115, gold={85,130},  lootRarity="Epic" }
+EnemyData["Bananita Dolphinita"]            = { tier=3, hp=950,  dmg=75,  defense=32, speed=10, xp=130, gold={95,145},  lootRarity="Epic" }
+EnemyData["Perochello Lemonchello"]         = { tier=3, hp=1000, dmg=80,  defense=34, speed=10, xp=140, gold={100,155}, lootRarity="Epic" }
+EnemyData["Brri Brri Bicus Dicus Bombicus"] = { tier=3, hp=1100, dmg=88,  defense=36, speed=10, xp=155, gold={110,170}, lootRarity="Epic" }
+EnemyData["Avocadini Guffo"]                = { tier=3, hp=1300, dmg=100, defense=37, speed=10, xp=185, gold={130,200}, lootRarity="Epic" }
+EnemyData["Salamino Penguino"]              = { tier=3, hp=1500, dmg=115, defense=39, speed=10, xp=210, gold={150,230}, lootRarity="Epic" }
+EnemyData["Ti Ti Ti Sahur"]                 = { tier=3, hp=1400, dmg=108, defense=38, speed=10, xp=198, gold={140,215}, lootRarity="Epic" }
+EnemyData["Penguin Tree"]                   = { tier=3, hp=1600, dmg=120, defense=41, speed=10, xp=225, gold={160,245}, lootRarity="Epic" }
+EnemyData["Penguino Cocosino"]              = { tier=3, hp=1750, dmg=130, defense=43, speed=10, xp=245, gold={175,265}, lootRarity="Epic" }
 
 -- ─── Legendary (tier 4) ──────────────────────────────────────────────────────
 EnemyData["Burbaloni Loliloli"]    = { tier=4, hp=2500,  dmg=180, defense=80,  speed=10, xp=350,  gold={250,400},  lootRarity="Legendary" }

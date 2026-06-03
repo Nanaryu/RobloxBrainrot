@@ -88,16 +88,16 @@ StarterGui/
 |-----|-------|-------|
 | TILE_SIZE | 8 studs | |
 | TILE_HEIGHT | 0.5 studs | |
-| GRID_WIDTH / HEIGHT | 256 × 256 | |
+| GRID_WIDTH / HEIGHT | 128 × 128 | |
 | MAP_NOISE_AMPLITUDE | 0.55 | Zone boundary organic wobble |
 | MAP_NOISE_SEED | 42 | Change for different map shapes |
-| TOWN_RADIUS | 12 tiles | Hard safe boundary — enemies blocked |
+| TOWN_RADIUS | 10 tiles | Hard safe boundary — enemies blocked |
 | MAX_CLICK_DISTANCE | 25 tiles | Client click-to-move range cap |
 | MOVE_TWEEN_TIME | 0.35 s | player & enemy slide speed |
 | AUTO_ATTACK_RANGE | 1 tile | Manhattan == 1 |
 | AUTO_ATTACK_INTERVAL | 1.0 s | |
 | ENEMY_ATTACK_INTERVAL | 1.5 s | |
-| BASE_ATK | 10 | Player base weapon attack (scales with equipment later) |
+| BASE_ATK | 15 | Player base weapon attack (scales with equipment later) |
 | CAM_VERTICAL_ANGLE | 56 | Higher = more top-down, better click balance |
 | ELITE_SPAWN_CHANCE | 5 % | |
 | ELITE_STAR_MAX | 5 | |
@@ -108,18 +108,26 @@ StarterGui/
 ## 🏗️ Implemented Systems
 
 ### ✅ Tile Grid (TileGridService)
-- 256×256 anchored Parts under `Workspace/Map/TileGrid/Tiles`
+- 128×128 anchored Parts under `Workspace/Map/TileGrid/Tiles`
 - Irregular boundary via fractal noise (deterministic, seed = 42)
 - Voronoi + noise zone assignment: each tile assigned to nearest zone centre with organic wobble
 - 5 zones with unique tile colours + materials
+- Zone border blending: transition tiles at Voronoi boundaries blend toward neutral color
+- Height variation: ±0.15 studs Y offset via fractal noise for bumpy terrain
 - `TileToWorld`, `WorldToTile`, `IsWalkable`, `GetNeighbours`, `SetTileType`, `SetTileWalkable`
 - `GetZone(tx, tz)` returns zone id string for a tile
-- `SetTileType(tx, tz, "Water")` marks unwalkable + recolors
+- `SetTileType(tx, tz, "Water")` marks unwalkable + recolors (glass material, 30% transparency)
+- **Decorations** (in `Workspace/Map/Decorations`):
+  - Water pools: 2-4 per zone, 2-3 tile clusters, glass material
+  - Rocks: 12-22 per zone, non-walkable slate tiles
+  - Bushes: 15-30 per zone (not Volcano), green ball parts, no collision
+  - Crystals: 4-10 per zone, neon cylinder parts, slight transparency
+  - Ambient particles: 6 emitters per zone (petals/dust/mist/embers)
 
 ### ✅ Zone System (ZoneService + ZoneData)
 - 5 zones: Town (safe), Grasslands (Tier 1), Desert (Tier 2), Swamp (Tier 3), Volcano (Tier 4)
 - Zones are organic blobs — centre offset + radius + noise amplitude (not concentric rings)
-- Town is a hard safe boundary (`TOWN_RADIUS = 12` tiles) — enemies cannot enter
+- Town is a hard safe boundary (`TOWN_RADIUS = 10` tiles) — enemies cannot enter
 - `ZoneService.GetZoneAt(tx, tz)` → zone table or nil (void tile)
 - `ZoneService.IsSafeZone(tx, tz)` — true for Town only
 - `ZoneService.GetRandomTileInZone(zoneId)` — random walkable tile in a zone
@@ -318,7 +326,7 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [x] Left panel UI (hover anims, sounds, panel open/close)
 - [x] Sound effect hooks (placeholder IDs)
 - [x] Death input lockout (movement + combat)
-- [x] Map expansion (256×256 Voronoi + noise blob zones)
+- [x] Map expansion (128×128 Voronoi + noise blob zones)
 - [x] Zone system (5 organic blobs: Town + 4 biome quadrants)
 - [x] Zone-based enemy spawning with density + respawn timer
 - [x] Safe zone (Brainrot Town — 12 tile radius, no enemies)
@@ -359,7 +367,7 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - **Kill tracking ownership**: KillTrackerService is sole owner of kill counts. Leaderboard.lua does NOT write `Kills.Value` in `refreshDisplay` or save it in `PlayerRemoving`. KillTracker sets `leaderstats.Kills.Value` via `WaitForChild` after load to win the race condition.
 - **DataStores in use**: `"Stats"` (Level, Coins via Leaderboard), `"KillTracker_v1"` (kills via KillTrackerService), `"Skills_v1"` (Attack/Defense XP via SkillService), `"Inventory_v1"` (inventory via LootService) — all saved on PlayerRemoving + BindToClose only (batched, no per-kill writes)
 - Enemy defense reduction: flat subtraction — `max(1, enemy_damage - DEF_Level)`
-- Attack bonus: `GetAttackLevel(player)` → ATK stat level; baseATK = `Config.BASE_ATK` (10)
+- Attack bonus: `GetAttackLevel(player)` → ATK stat level; baseATK = `Config.BASE_ATK` (15)
 - Damage: `(ATK_Level × BASE_ATK) / 20` to `/10`, accuracy check vs enemy defense, roll minus defense
 - Attack XP: 1 per enemy hit (CombatService); Defense XP: 1 per combined tick taken (EnemyService `processDamageAccumulator`, not per enemy)
 - `SkillUpdated` fires after every XP grant + on CharacterAdded (0.5s delay) for HUD init
@@ -400,7 +408,7 @@ stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.171))   -- levels 55–99
 
 ### Damage Formula (auto-attack)
 ```
-baseATK = Config.BASE_ATK (10, scales with equipment later)
+baseATK = Config.BASE_ATK (15, scales with equipment later)
 min_raw = (ATK_Level × baseATK) / 20
 max_raw = (ATK_Level × baseATK) / 10
 accuracy = clamp((max_raw - enemy_DEF) / (max_raw - min_raw), 0, 1)
@@ -422,9 +430,9 @@ final_damage = max(1, enemy_damage - DEF_Level)
 ### Enemy Defense Values (EnemyData)
 | Tier | Defense Range | Example |
 |------|--------------|---------|
-| 1 (Common) | 2-8 | Noobini: 2, Pipi Kiwi: 6 |
-| 2 (Rare) | 12-25 | Trippi Troppi: 12, Frogo Elfo: 22 |
-| 3 (Epic) | 35-55 | Cappuccino: 35, Penguino: 55 |
+| 1 (Common) | 1-6 | Noobini: 1, Pipi Kiwi: 5 |
+| 2 (Rare) | 8-18 | Trippi Troppi: 8, Frogo Elfo: 18 |
+| 3 (Epic) | 25-43 | Cappuccino: 25, Penguino: 43 |
 | 4 (Legendary) | 80-150 | Burbaloni: 80, Sigma Girl: 150 |
 
 ### Enemy Speed Nerf
