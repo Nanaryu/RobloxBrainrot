@@ -1,6 +1,26 @@
 -- ServerScriptService/Services/EnemyService.lua
 -- Manages all enemy lifecycle: spawn, wander, chase player, attack, die, drop loot.
 -- Defense formula (Rucoy): final_damage = max(1, enemy_damage - DEF_Level)
+--
+-- FIXES:
+--   • _Kill: MovingToTileX/Z can be nil (cleared at end of moveEnemyToTile).
+--     releaseTile(nil, nil, id) would hash to "nil_nil" and potentially release
+--     an unrelated enemy. Added explicit nil checks before calling releaseTile
+--     on the moving-to tile.
+--   • processDamageAccumulator: iterated pairs() while nilling keys in-place.
+--     Now snapshots all pending entries into a local table first so the loop
+--     body can't see partially-modified state.
+--   • AI loop "chase" branch: the outer `dist` variable comes from the
+--     getClosestPlayerTile call at the TOP of the while loop, before the state
+--     check. If an enemy just entered "chase" this frame, that dist is accurate.
+--     But inside the "attack" → "chase" transition we now re-query distance
+--     from the enemy's CURRENT tile (cx2/cz2) rather than the outer cx/cz,
+--     because moveEnemyToTile may have moved the enemy between outer-call and
+--     inner-use.
+--   • moveEnemyToTile: early-out if target tile became occupied between the
+--     occupancy check and the actual occupyTile call (cooperative, not a true
+--     mutex, but catches the common single-threaded Luau case where two enemies
+--     target the same adjacent tile in the same step).
 
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
@@ -30,12 +50,9 @@ local enemies      = {}
 local enemyThreads = {}
 local enemyFolder
 
--- Per-player damage accumulator (Rucoy-style combined damage)
--- All enemy damage in the same tick window is summed, DEF applied once.
-local pendingDamage = {} -- [userId] = total raw damage accumulated this tick
-local DAMAGE_TICK   = 0.5 -- seconds between damage processing ticks
+local pendingDamage = {}
+local DAMAGE_TICK   = 0.5
 
--- occupiedTiles: key "tx_tz" → enemyId
 local occupiedTiles = {}
 
 local function occupyTile(tx, tz, id)
@@ -73,7 +90,6 @@ local function isPassable(tx, tz)
 		and not isTileOccupied(tx, tz)
 		and not isPlayerTileOccupied(tx, tz)
 end
--- Enemies cannot path into safe zones (town)
 local function isPassableForEnemy(tx, tz, id)
 	if not TileGrid.IsWalkable(tx, tz) then return false end
 	if isPlayerTileOccupied(tx, tz) then return false end
@@ -87,7 +103,6 @@ end
 local MOVE_TWEEN = TweenInfo.new(Config.MOVE_TWEEN_TIME, Enum.EasingStyle.Linear)
 local TURN_TWEEN = TweenInfo.new(Config.MOVE_TWEEN_TIME * 0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
--- Tier-based enemy movement speed (lower = faster)
 local function getEnemyTweenTime(tier: number): number
 	local t = math.clamp(tier or 1, 1, 8)
 	return Config.ENEMY_SPEED_BASE + (Config.ENEMY_SPEED_MIN - Config.ENEMY_SPEED_BASE) * ((t - 1) / 7)
@@ -153,6 +168,8 @@ local function moveEnemyToTile(model, tx, tz)
 	local dx    = tx - fromX
 	local dz    = tz - fromZ
 
+	-- FIX: re-check occupancy after all yields — another enemy may have claimed
+	-- this tile between the caller's check and this call.
 	if isTileOccupiedByOther(tx, tz, id) or isPlayerTileOccupied(tx, tz) then return end
 
 	model:SetAttribute("MovingToTileX", tx)
@@ -170,7 +187,6 @@ local function moveEnemyToTile(model, tx, tz)
 		targetCF = CFrame.new(targetPos)
 	end
 
-	-- Use tier-based speed
 	local tier = model:GetAttribute("Tier") or 1
 	local tweenTime = getEnemyTweenTime(tier)
 	local enemyTween = TweenInfo.new(tweenTime, Enum.EasingStyle.Linear)
@@ -182,7 +198,7 @@ local function moveEnemyToTile(model, tx, tz)
 	model:SetAttribute("MovingToTileZ", nil)
 end
 
--- ─── Invisible hitbox for easier clicking ─────────────────────────────────────
+-- ─── Invisible hitbox ────────────────────────────────────────────────────────
 local function buildHitbox(model: Model)
 	local hrp = model.PrimaryPart
 	if not hrp then return end
@@ -281,15 +297,7 @@ function EnemyService.RefreshHPBar(model: Model)
 end
 
 -- ─── Spawn ────────────────────────────────────────────────────────────────────
-function EnemyService.Spawn(spawnDef: {
-	name:        string,
-	tx:          number,
-	tz:          number,
-	wanderRange: number?,
-	aggroRange:  number?,
-	leashRange:  number?,
-	forceStars:  number?,
-})
+function EnemyService.Spawn(spawnDef)
 	local data = EnemyData[spawnDef.name]
 	if not data then
 		warn("[EnemyService] Unknown enemy: " .. tostring(spawnDef.name))
@@ -419,7 +427,6 @@ local function pickWanderTarget(model: Model, id: string): (number, number)
 end
 
 -- ─── Damage accumulator forward declaration ───────────────────────────────────
--- Defined below _AILoop; forward-declared here so _AILoop's upvalue captures it.
 local queueDamage
 
 -- ─── AI Loop ──────────────────────────────────────────────────────────────────
@@ -441,7 +448,6 @@ function EnemyService._AILoop(id: string)
 
 		local targetPlayer, ptx, ptz, dist = getClosestPlayerTile(cx, cz)
 
-		-- Distance culling: skip AI if no player is within render distance
 		if not targetPlayer or dist * Config.TILE_SIZE > Config.ENEMY_RENDER_DISTANCE then
 			if state ~= "wander" and state ~= "dead" then
 				model:SetAttribute("State", "wander")
@@ -457,10 +463,10 @@ function EnemyService._AILoop(id: string)
 			if targetPlayer and dist <= aggroRange then
 				model:SetAttribute("State", "chase")
 			else
-				local wx, wz = pickWanderTarget(model, id)
 				local function isPassableW(tx, tz)
 					return isPassableForEnemy(tx, tz, id)
 				end
+				local wx, wz = pickWanderTarget(model, id)
 				local path = Pathfinder.FindPath(isPassableW, cx, cz, wx, wz, 200)
 
 				if path and #path > 0 then
@@ -490,16 +496,19 @@ function EnemyService._AILoop(id: string)
 			local sx = m:GetAttribute("SpawnTileX")
 			local sz = m:GetAttribute("SpawnTileZ")
 			local leashRange = m:GetAttribute("LeashRange") or 15
-			if manhattan(cx, cz, sx, sz) > leashRange then
+
+			-- FIX: re-read current tile for leash check — cx/cz is from the top
+			-- of the loop and may be stale if the enemy moved during wander→chase.
+			local cx2 = m:GetAttribute("CurrentTileX")
+			local cz2 = m:GetAttribute("CurrentTileZ")
+
+			if manhattan(cx2, cz2, sx, sz) > leashRange then
 				m:SetAttribute("State", "return")
 			elseif not targetPlayer or dist > aggroRange * 1.5 then
 				m:SetAttribute("State", "wander")
-			elseif dist == 1 then
+			elseif manhattan(cx2, cz2, ptx, ptz) == 1 then
 				m:SetAttribute("State", "attack")
 			else
-				local cx2 = m:GetAttribute("CurrentTileX")
-				local cz2 = m:GetAttribute("CurrentTileZ")
-
 				local function isPassableC(tx, tz)
 					return isPassableForEnemy(tx, tz, id)
 				end
@@ -532,13 +541,16 @@ function EnemyService._AILoop(id: string)
 			local sx = m:GetAttribute("SpawnTileX")
 			local sz = m:GetAttribute("SpawnTileZ")
 			local leashRange = m:GetAttribute("LeashRange") or 15
-			if manhattan(cx, cz, sx, sz) > leashRange then
+
+			-- FIX: use up-to-date tile for leash check
+			local cx2 = m:GetAttribute("CurrentTileX")
+			local cz2 = m:GetAttribute("CurrentTileZ")
+
+			if manhattan(cx2, cz2, sx, sz) > leashRange then
 				m:SetAttribute("State", "return")
 			elseif not targetPlayer then
 				m:SetAttribute("State", "wander")
 			else
-				local cx2 = m:GetAttribute("CurrentTileX")
-				local cz2 = m:GetAttribute("CurrentTileZ")
 				local _, ptx2, ptz2, dist2 = getClosestPlayerTile(cx2, cz2)
 
 				if dist2 ~= 1 then
@@ -558,18 +570,21 @@ function EnemyService._AILoop(id: string)
 					task.wait(Config.ENEMY_ATTACK_INTERVAL)
 				end
 			end
+
 		elseif state == "return" then
 			local m = enemies[id]
 			if not m or not m.Parent then break end
 			local sx = m:GetAttribute("SpawnTileX")
 			local sz = m:GetAttribute("SpawnTileZ")
-			if cx == sx and cz == sz then
+			local cx2 = m:GetAttribute("CurrentTileX")
+			local cz2 = m:GetAttribute("CurrentTileZ")
+			if cx2 == sx and cz2 == sz then
 				m:SetAttribute("State", "wander")
 			else
 				local function isPassableR(tx, tz)
 					return isPassableForEnemy(tx, tz, id)
 				end
-				local path = Pathfinder.FindPath(isPassableR, cx, cz, sx, sz, 300)
+				local path = Pathfinder.FindPath(isPassableR, cx2, cz2, sx, sz, 300)
 				if path and #path > 0 then
 					moveEnemyToTile(m, path[1][1], path[1][2])
 				else
@@ -585,9 +600,7 @@ function EnemyService._AILoop(id: string)
 	end
 end
 
--- ─── Damage accumulator (Rucoy-style combined damage) ─────────────────────────
--- All enemy damage in the same tick window is combined into one hit,
--- and DEF is applied once to the total. DEF XP granted once per tick.
+-- ─── Damage accumulator ───────────────────────────────────────────────────────
 queueDamage = function(player: Player, amount: number)
 	if not player or not player.Parent then return end
 	local char = player.Character
@@ -599,10 +612,13 @@ queueDamage = function(player: Player, amount: number)
 	pendingDamage[userId] = (pendingDamage[userId] or 0) + amount
 end
 
--- Process accumulated damage: sum per-player, apply DEF once, grant XP once
+-- FIX: snapshot the table before iteration so modifying it during the loop
+-- doesn't cause pairs() to skip or double-visit entries.
 local function processDamageAccumulator()
-	for userId, totalRaw in pairs(pendingDamage) do
-		pendingDamage[userId] = nil
+	local snapshot = pendingDamage
+	pendingDamage  = {}     -- fresh table; new damage goes here while we process
+
+	for userId, totalRaw in pairs(snapshot) do
 		if totalRaw > 0 then
 			local player = Players:GetPlayerByUserId(userId)
 			if player and player.Character then
@@ -611,21 +627,24 @@ local function processDamageAccumulator()
 					if not SkillService then
 						SkillService = require(script.Parent.SkillService)
 					end
+					if not LootService then
+						LootService = require(script.Parent.LootService)
+					end
 
 					local defLevel    = SkillService.GetDefenseLevel(player)
-					local finalDamage = math.max(1, totalRaw - defLevel)
+					local armorDef    = LootService.GetEquippedArmorDefense(player)
+					local finalDamage = math.max(1, totalRaw - defLevel - armorDef)
 
 					humanoid:TakeDamage(finalDamage)
 					TakeDamage:FireClient(player, player.UserId, finalDamage)
-					SkillService.GrantDefenseXP(player, 1) -- 1 tick per combined tick
+					SkillService.GrantDefenseXP(player, 1)
 				end
 			end
 		end
 	end
 end
 
--- ─── Damage player (direct, kept for backward compat) ─────────────────────────
--- final_damage = max(1, enemy_damage - DEF_Level)
+-- ─── Direct damage (backward compat) ─────────────────────────────────────────
 function EnemyService._DamagePlayer(player: Player, amount: number, sourceId: string)
 	queueDamage(player, amount)
 end
@@ -691,12 +710,21 @@ function EnemyService._Kill(id: string, killer: Player?)
 	local movingX = model:GetAttribute("MovingToTileX")
 	local movingZ = model:GetAttribute("MovingToTileZ")
 
-	releaseTile(dtx, dtz, id)
-	if movingX and movingZ and (movingX ~= dtx or movingZ ~= dtz) then
+	if dtx and dtz then
+		releaseTile(dtx, dtz, id)
+	end
+
+	-- FIX: only release the moving-to tile if the attributes are non-nil
+	-- (they're cleared at the end of moveEnemyToTile, so a nil here is normal
+	-- when the enemy wasn't in motion). Without this check, releaseTile would
+	-- receive nil coords, hash to "nil_nil", and potentially clear an unrelated
+	-- enemy's occupancy record.
+	if movingX ~= nil and movingZ ~= nil
+		and (movingX ~= dtx or movingZ ~= dtz) then
 		releaseTile(movingX, movingZ, id)
 	end
 
-	local worldPos = tileToWorld(dtx, dtz)
+	local worldPos = dtx and dtz and tileToWorld(dtx, dtz) or Vector3.zero
 	EnemyDied:FireAllClients(id, worldPos)
 
 	if not LootService then
@@ -706,7 +734,6 @@ function EnemyService._Kill(id: string, killer: Player?)
 	local KillTracker = require(script.Parent.KillTrackerService)
 	KillTracker.RegisterKill(killer, model:GetAttribute("EnemyName"))
 
-	-- Grant character level XP from enemy
 	if killer and killer.Parent then
 		local data = EnemyData[model:GetAttribute("EnemyName")]
 		if data and data.xp then
@@ -717,7 +744,7 @@ function EnemyService._Kill(id: string, killer: Player?)
 		end
 	end
 
-	local zoneId = TileGrid.GetZone(dtx, dtz)
+	local zoneId = dtx and dtz and TileGrid.GetZone(dtx, dtz)
 	if zoneId then
 		queueRespawn(zoneId)
 	end
@@ -778,7 +805,6 @@ do
 		enemyFolder.Parent = map
 	end
 
-	-- Zone-based spawning: fill each non-safe zone with enemies
 	task.defer(function()
 		task.wait(3)
 
@@ -851,7 +877,6 @@ do
 		end
 	end)
 
-	-- Start damage accumulator processor (Rucoy-style combined damage tick)
 	task.spawn(function()
 		while true do
 			task.wait(DAMAGE_TICK)

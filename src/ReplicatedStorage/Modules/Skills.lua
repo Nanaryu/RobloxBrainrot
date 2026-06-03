@@ -46,15 +46,19 @@ end
 -- ─── Stat XP — ATK / DEF (stat rate) ────────────────────────────────────────
 -- stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.373))   for levels 0–54
 -- stat_xp_for_level(n) = floor(n ^ (n/1000 + 2.171))   for levels 55–99
+-- These formulas give the DELTA (per-level cost) not cumulative.
 -- STAT_XP_TABLE[stat] = cumulative ticks needed to reach that stat level.
 -- STAT_XP_TABLE[0] = 0 (stat level 0 = no bonus).
 local STAT_XP_TABLE = { [0] = 0 }
-for s = 1, Skills.MAX_LEVEL do
+local function statDelta(s: number): number
 	if s <= 54 then
-		STAT_XP_TABLE[s] = math.floor(s ^ (s / 1000 + 2.373))
+		return math.floor(s ^ (s / 1000 + 2.373))
 	else
-		STAT_XP_TABLE[s] = math.floor(s ^ (s / 1000 + 2.171))
+		return math.floor(s ^ (s / 1000 + 2.171))
 	end
+end
+for s = 1, Skills.MAX_LEVEL do
+	STAT_XP_TABLE[s] = STAT_XP_TABLE[s - 1] + statDelta(s)
 end
 Skills.STAT_XP_TABLE = STAT_XP_TABLE
 

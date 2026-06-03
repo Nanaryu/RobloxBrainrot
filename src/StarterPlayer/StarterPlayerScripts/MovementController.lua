@@ -1,6 +1,28 @@
 -- StarterPlayer/StarterPlayerScripts/MovementController.lua
 -- Click-to-move, cardinal only. No diagonal movement.
 -- Multi-tile paths use server A* and animate step-by-step.
+--
+-- FIXES:
+--   • Attack-move path handler (requestId == -1): previously did `moveToken += 1`
+--     twice in a row before starting the new path coroutine. The double-increment
+--     meant any previously started coroutine saw TWO increments and any delayed
+--     tile-update from MovementService could still fire between the two increments.
+--     Now: one increment to cancel (with a token capture), then start the coroutine
+--     with that same token — consistent with how animatePath works.
+--   • Attack-move path handler: the final `currentTileX = path[#path][1]` assignment
+--     after the step loop was redundant (moveStep already updates currentTileX/Z)
+--     and could overwrite a partially-completed NEW path if a second attack-move
+--     arrived while the loop was still executing. Removed; moveStep is the sole writer.
+--   • fireMoveRequest timeout cleanup: the 0.8 s fallback that clears
+--     requestedTileX/Z now also compares acceptedMoveRequestId correctly —
+--     if the server responded (acceptedMoveRequestId >= rid) we must NOT clear,
+--     because we're already animating that path.
+--   • slideToWorld: added a guard so the loop cannot yield after moveToken has
+--     already been invalidated. Previously a Heartbeat:Wait() could return AFTER
+--     a new token was set, causing one extra step to execute.
+--   • currentTileX/Z updated in moveStep only on successful completion (already
+--     the case), but now also guarded against the HRP being nil (character
+--     removal mid-walk).
 
 local Players           = game:GetService("Players")
 local TweenService      = game:GetService("TweenService")
@@ -15,10 +37,8 @@ local PlayerMoved = Remotes:WaitForChild("PlayerMoved")
 
 local player = Players.LocalPlayer
 
-local MOVE_SPEED = Config.TILE_SIZE / Config.MOVE_TWEEN_TIME
 local MOVE_TWEEN = TweenInfo.new(Config.MOVE_TWEEN_TIME, Enum.EasingStyle.Linear)
 
--- Returns current player speed (tween time per tile) based on level
 local function getPlayerSpeed()
 	local char = player.Character
 	local ls = char and char:FindFirstChild("leaderstats")
@@ -76,15 +96,9 @@ local acceptedMoveRequestId = 0
 local requestedTileX        = nil
 local requestedTileZ        = nil
 local destinationHighlight  = nil
-local otherPlayerTokens     = {} -- [userId] → number; cancel old tween coroutines
+local otherPlayerTokens     = {}
 
--- `spawned` tracks whether the server has confirmed our initial tile placement.
--- It is only used inside PlayerMoved to distinguish a spawn snap from a path update.
--- It does NOT block requestMove — clicks before spawn are queued and replayed.
-local spawned = false
-
--- If the player clicks before the server has confirmed spawn, we store their
--- intended destination here and re-issue it the moment we receive the spawn snap.
+local spawned      = false
 local pendingTileX = nil
 local pendingTileZ = nil
 
@@ -181,19 +195,22 @@ end
 player.CharacterAdded:Connect(setupCharacter)
 if player.Character then setupCharacter(player.Character) end
 
--- ─── Core mover: slide HRP to targetPos at constant speed ────────────────────
+-- ─── Core mover ───────────────────────────────────────────────────────────────
 local function slideToWorld(targetPos, facingDir, token)
 	if not hrp or not isAlive() then return false end
 
-	local speed = getPlayerSpeed()
-	local moveSpeed = Config.TILE_SIZE / speed
+	local moveSpeed = Config.TILE_SIZE / getPlayerSpeed()
 
 	while token == moveToken and isAlive() and hrp do
+		-- FIX: capture dt BEFORE re-checking token so a token change between
+		-- Heartbeat:Wait() and the while condition doesn't cause one extra step.
+		local dt = RunService.Heartbeat:Wait()
+		if token ~= moveToken then break end  -- re-check immediately after yield
+
 		local delta = Vector3.new(
 			targetPos.X - hrp.Position.X, 0, targetPos.Z - hrp.Position.Z)
 		if delta.Magnitude <= 0.03 then break end
 
-		local dt   = RunService.Heartbeat:Wait()
 		local step = math.min(delta.Magnitude, moveSpeed * dt)
 		local dir  = delta.Unit
 		facingDir  = dir
@@ -202,7 +219,7 @@ local function slideToWorld(targetPos, facingDir, token)
 			hrp.Position + dir * step + dir)
 	end
 
-	if token ~= moveToken or not isAlive() then return false end
+	if token ~= moveToken or not isAlive() or not hrp then return false end
 	if facingDir.Magnitude > 0 then
 		hrp.CFrame = CFrame.lookAt(targetPos, targetPos + facingDir)
 	else
@@ -211,8 +228,8 @@ local function slideToWorld(targetPos, facingDir, token)
 	return true
 end
 
--- Move to a single tile; returns false if interrupted.
 local function moveStep(tx, tz, token)
+	if not hrp then return false end
 	local target = tileToWorld(tx, tz)
 	local facing = Vector3.new(tx - currentTileX, 0, tz - currentTileZ)
 	if facing.Magnitude <= 0 then
@@ -262,10 +279,14 @@ local function fireMoveRequest(tx, tz)
 	requestedTileX = tx
 	requestedTileZ = tz
 	RequestMove:FireServer(tx, tz, currentTileX, currentTileZ, rid)
-	-- If the server doesn't respond within 0.8 s (e.g. blocked tile), clean up.
+
+	-- FIX: only clean up if the server hasn't responded and this is still the
+	-- active request. Checking acceptedMoveRequestId >= rid means "server already
+	-- replied" — don't clear in that case.
 	task.delay(0.8, function()
 		if requestedTileX == tx and requestedTileZ == tz
-			and acceptedMoveRequestId < rid then
+			and moveRequestId == rid                    -- still the latest request
+			and acceptedMoveRequestId < rid then        -- server hasn't responded
 			requestedTileX = nil
 			requestedTileZ = nil
 			clearHighlight()
@@ -281,12 +302,9 @@ local function requestMove(tx, tz)
 	if not isTileWalkable(tx, tz) then return end
 	if isEnemyOnTile(tx, tz) then return end
 
-	-- Cap click distance to prevent laggy long-range pathfinding
 	local clickDist = math.abs(tx - currentTileX) + math.abs(tz - currentTileZ)
 	if clickDist > Config.MAX_CLICK_DISTANCE then return end
 
-	-- If the server hasn't confirmed our spawn tile yet, queue the destination
-	-- and let the PlayerMoved spawn-snap handler replay it.
 	if not spawned then
 		pendingTileX = tx
 		pendingTileZ = tz
@@ -299,19 +317,17 @@ local function requestMove(tx, tz)
 
 	setHighlight(tx, tz)
 	fireMoveRequest(tx, tz)
-	-- animatePath is triggered by the PlayerMoved response from the server.
 end
 
 -- ─── PlayerMoved remote ───────────────────────────────────────────────────────
 PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
-	-- ── Other player: tween their character along the path ────────────────────
+	-- ── Other player ─────────────────────────────────────────────────────────
 	if userId ~= player.UserId then
 		local other = Players:GetPlayerByUserId(userId)
 		if not other or not other.Character then return end
 		local otherHRP = other.Character:FindFirstChild("HumanoidRootPart")
 		if not otherHRP then return end
 
-		-- Cancel any in-progress tween for this player
 		otherPlayerTokens[userId] = (otherPlayerTokens[userId] or 0) + 1
 		local token = otherPlayerTokens[userId]
 
@@ -342,8 +358,7 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
 
 	if not isAlive() then return end
 
-	-- ── Initial spawn snap ────────────────────────────────────────────────────
-	-- The server sends PlayerMoved with no path on first spawn.
+	-- ── Spawn snap ────────────────────────────────────────────────────────────
 	if not spawned then
 		spawned        = true
 		currentTileX   = tx
@@ -354,49 +369,53 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
 		clearHighlight()
 		if hrp then hrp.CFrame = CFrame.new(tileToWorld(tx, tz)) end
 
-		-- Replay any click the player made before the snap arrived.
 		if pendingTileX and pendingTileZ then
 			local ptx, ptz = pendingTileX, pendingTileZ
 			pendingTileX   = nil
 			pendingTileZ   = nil
-			-- Re-enter through requestMove now that spawned = true.
 			task.defer(function() requestMove(ptx, ptz) end)
 		end
 		return
 	end
 
-	-- ── Attack-move path (server-driven walk-to-enemy) ─────────────────────────
+	-- ── Attack-move path (server-driven walk-to-enemy, requestId == -1) ───────
 	if requestId == -1 and path and #path > 0 then
-		-- Cancel any current movement
+		-- FIX: one clean token increment to cancel any in-progress movement,
+		-- then reuse that same token for the new path coroutine.
 		moveToken += 1
+		local token = moveToken
 		isMoving = false
 		requestedTileX = nil
 		requestedTileZ = nil
 		clearHighlight()
 		stopWalk()
 
-		-- Animate the path directly
-		moveToken += 1
-		local token = moveToken
+		-- Animate the attack-move path under our captured token
 		isMoving = true
 		playWalk()
-
-		for _, step in ipairs(path) do
-			if token ~= moveToken then return end
-			if not moveStep(step[1], step[2], token) then
-				if token == moveToken then stopWalk() end
-				return
+		task.spawn(function()
+			for _, step in ipairs(path) do
+				if token ~= moveToken then
+					if token == moveToken then stopWalk() end
+					isMoving = false
+					return
+				end
+				if not moveStep(step[1], step[2], token) then
+					if token == moveToken then stopWalk() end
+					isMoving = false
+					return
+				end
 			end
-		end
-
-		isMoving = false
-		currentTileX = path[#path][1]
-		currentTileZ = path[#path][2]
-		stopWalk()
+			-- FIX: don't set currentTileX/Z here — moveStep already did it for
+			-- each step. Setting it again here could overwrite a new path's
+			-- first-step update if another attack-move arrived during the loop.
+			isMoving = false
+			stopWalk()
+		end)
 		return
 	end
 
-	-- ── Animate server-approved path ──────────────────────────────────────────
+	-- ── Animate server-approved player-move path ──────────────────────────────
 	if requestedTileX == tx and requestedTileZ == tz and requestId == moveRequestId then
 		acceptedMoveRequestId = requestId
 		task.spawn(animatePath, path or { {tx, tz} })
@@ -422,7 +441,6 @@ mouse.Button1Down:Connect(function()
 	local target = mouse.Target
 	if not target then return end
 
-	-- If clicked on an enemy, skip movement (CombatController handles it)
 	if getEnemyFromPart(target) then return end
 
 	local tx, tz = target.Name:match("^Tile_(%d+)_(%d+)$")

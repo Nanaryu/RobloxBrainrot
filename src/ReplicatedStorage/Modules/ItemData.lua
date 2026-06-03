@@ -3,12 +3,12 @@
 -- LootService uses this to generate rolled item instances.
 --
 -- Item slots:
---   weapon   → ATK bonus
---   offhand  → ATK bonus (secondary)
---   helmet   → DEF bonus
---   chest    → DEF bonus (main)
---   legs     → DEF bonus
---   boots    → DEF bonus (minor) + small speed note (cosmetic for now)
+--   weapon   → ATK value (absolute, replaces BASE_ATK)
+--   offhand  → ATK value (adds to total ATK)
+--   helmet   → DEF bonus (adds to total DEF)
+--   chest    → DEF bonus (adds to total DEF)
+--   legs     → DEF bonus (adds to total DEF)
+--   boots    → DEF bonus (adds to total DEF)
 --
 -- Each entry:
 --   slot       (string)
@@ -19,9 +19,11 @@
 --   name       (string)  display name
 --   icon       (string)  rbxassetid — placeholder "" until art is ready
 --
--- Stat ranges scale loosely with rarity:
---   Common    ×1.0   Rare ×1.8   VeryRare ×3.0
---   Epic      ×5.0   Legendary ×9.0   Mythic ×16.0   Secret ×28.0
+-- Weapon ATK values follow Rucoy Online (weapon_data.csv):
+--   Common → Dagger (14–19),  Rare → Short Sword (20–26),
+--   VeryRare → Sword (27–34), Epic → Broadsword (35–44),
+--   Legendary → Slayer (45–56),  Mythic → Icy/Lava (57–70),
+--   Secret → Golden (71–90)
 
 local ItemData = {}
 
@@ -38,28 +40,32 @@ local function item(name, slot, statType, rarity, sMin, sMax, icon)
 	}
 end
 
--- ─── Weapons ──────────────────────────────────────────────────────────────────
--- Named after the brainrot theme
-ItemData["Pizza Slicer"]          = item("Pizza Slicer",          "weapon", "atk", "Common",    2,   4)
-ItemData["Noobini Stick"]         = item("Noobini Stick",         "weapon", "atk", "Common",    3,   5)
-ItemData["Lirili Branch"]         = item("Lirili Branch",         "weapon", "atk", "Rare",      6,   9)
-ItemData["Trippi Blade"]          = item("Trippi Blade",          "weapon", "atk", "Rare",      7,  11)
-ItemData["Cappuccino Dagger"]     = item("Cappuccino Dagger",     "weapon", "atk", "VeryRare",  12,  18)
-ItemData["Brr Brr Fang"]         = item("Brr Brr Fang",         "weapon", "atk", "Epic",      24,  34)
-ItemData["Assassino Blade"]       = item("Assassino Blade",       "weapon", "atk", "Epic",      28,  40)
-ItemData["Bombardiro Cannon"]     = item("Bombardiro Cannon",     "weapon", "atk", "Legendary", 50,  72)
-ItemData["Sigma Sword"]           = item("Sigma Sword",           "weapon", "atk", "Legendary", 58,  82)
-ItemData["Crocodilo Fang"]        = item("Crocodilo Fang",        "weapon", "atk", "Mythic",    90, 130)
-ItemData["Cavallo Hoof Blade"]    = item("Cavallo Hoof Blade",    "weapon", "atk", "Mythic",   100, 145)
-ItemData["Tralalero Spear"]       = item("Tralalero Spear",       "weapon", "atk", "Secret",   175, 250)
-ItemData["Dragon Cannelloni Staff"]= item("Dragon Cannelloni Staff","weapon","atk","Secret",   200, 280)
+-- ─── Weapons (absolute ATK — replaces BASE_ATK when equipped) ────────────────
+-- Ranges mapped from Rucoy Online weapon data (weapon_data.csv):
+--   Common → Dagger (14–19),  Rare → Short Sword (20–26),
+--   VeryRare → Sword (27–34), Epic → Broadsword (35–44),
+--   Legendary → Slayer (45–56),  Mythic → Icy/Lava (57–70),
+--   Secret → Golden (71–90)
+ItemData["Pizza Slicer"]          = item("Pizza Slicer",          "weapon", "atk", "Common",    14,  17)
+ItemData["Noobini Stick"]         = item("Noobini Stick",         "weapon", "atk", "Common",    16,  19)
+ItemData["Lirili Branch"]         = item("Lirili Branch",         "weapon", "atk", "Rare",      20,  23)
+ItemData["Trippi Blade"]          = item("Trippi Blade",          "weapon", "atk", "Rare",      22,  26)
+ItemData["Cappuccino Dagger"]     = item("Cappuccino Dagger",     "weapon", "atk", "VeryRare",  27,  31)
+ItemData["Brr Brr Fang"]         = item("Brr Brr Fang",         "weapon", "atk", "Epic",      35,  39)
+ItemData["Assassino Blade"]       = item("Assassino Blade",       "weapon", "atk", "Epic",      37,  44)
+ItemData["Bombardiro Cannon"]     = item("Bombardiro Cannon",     "weapon", "atk", "Legendary", 45,  51)
+ItemData["Sigma Sword"]           = item("Sigma Sword",           "weapon", "atk", "Legendary", 49,  56)
+ItemData["Crocodilo Fang"]        = item("Crocodilo Fang",        "weapon", "atk", "Mythic",    57,  64)
+ItemData["Cavallo Hoof Blade"]    = item("Cavallo Hoof Blade",    "weapon", "atk", "Mythic",    62,  70)
+ItemData["Tralalero Spear"]       = item("Tralalero Spear",       "weapon", "atk", "Secret",    71,  80)
+ItemData["Dragon Cannelloni Staff"]= item("Dragon Cannelloni Staff","weapon","atk","Secret",    76,  90)
 
--- ─── Offhand ──────────────────────────────────────────────────────────────────
-ItemData["Kiwi Shield Shard"]     = item("Kiwi Shield Shard",    "offhand","atk", "Common",    1,   3)
-ItemData["Troppi Totem"]          = item("Troppi Totem",         "offhand","atk", "Rare",      5,   8)
-ItemData["Bambini Tome"]          = item("Bambini Tome",         "offhand","atk", "Epic",      20,  30)
-ItemData["Gorillo Knuckle"]       = item("Gorillo Knuckle",      "offhand","atk", "Mythic",    80, 120)
-ItemData["Las Sis Orb"]           = item("Las Sis Orb",          "offhand","atk", "Secret",   160, 230)
+-- ─── Offhand (lower ATK than primary weapon, secondary slot) ───────────────────
+ItemData["Kiwi Shield Shard"]     = item("Kiwi Shield Shard",    "offhand","atk", "Common",    6,   9)
+ItemData["Troppi Totem"]          = item("Troppi Totem",         "offhand","atk", "Rare",     10,  14)
+ItemData["Bambini Tome"]          = item("Bambini Tome",         "offhand","atk", "Epic",     20,  27)
+ItemData["Gorillo Knuckle"]       = item("Gorillo Knuckle",      "offhand","atk", "Mythic",   37,  48)
+ItemData["Las Sis Orb"]           = item("Las Sis Orb",          "offhand","atk", "Secret",   49,  62)
 
 -- ─── Helmets ──────────────────────────────────────────────────────────────────
 ItemData["Cheese Cap"]            = item("Cheese Cap",           "helmet", "def", "Common",    1,   3)

@@ -4,6 +4,13 @@
 --   local Pathfinder = require(...)
 --   local path = Pathfinder.FindPath(isWalkableFn, startX, startZ, goalX, goalZ, maxNodes)
 --   -- returns array of {tx, tz} steps from start→goal (exclusive of start), or nil if unreachable
+--
+-- FIXES:
+--   • Added proper closed set — nodes are never re-expanded, preventing wasted capacity
+--     and potential incorrect paths from stale g-scores being re-opened.
+--   • key() uses string concatenation instead of arithmetic to guarantee zero collisions
+--     regardless of grid dimensions.
+--   • orderedNeighbours tie-breaking cleaned up and made deterministic.
 
 local Pathfinder = {}
 
@@ -11,27 +18,29 @@ local function heuristic(ax, az, bx, bz)
 	return math.abs(ax - bx) + math.abs(az - bz)
 end
 
+-- String key — zero collision risk at any grid size.
+local function key(x, z)
+	return x .. "_" .. z
+end
+
 local BASE_NEIGHBOURS = { {1,0}, {-1,0}, {0,1}, {0,-1} }
 
 local function orderedNeighbours(cx, cz, goalX, goalZ)
 	local neighbours = {}
-	local remainingX = math.abs(goalX - cx)
-	local remainingZ = math.abs(goalZ - cz)
-
 	for _, off in ipairs(BASE_NEIGHBOURS) do
 		local nx, nz = cx + off[1], cz + off[2]
 		local h = heuristic(nx, nz, goalX, goalZ)
-		-- towardGoal: does this move reduce the dominant remaining distance?
+		-- towardGoal: positive when this step moves closer on each axis
 		local towardGoal = 0
-		if off[1] ~= 0 and remainingX > 0 then
-			-- Horizontal move: toward goal if in the right direction
-			local correctDir = (off[1] > 0) == (goalX > cx)
-			if correctDir then towardGoal = towardGoal + remainingX end
+		if off[1] ~= 0 then
+			if (off[1] > 0) == (goalX > cx) then
+				towardGoal = towardGoal + math.abs(goalX - cx)
+			end
 		end
-		if off[2] ~= 0 and remainingZ > 0 then
-			-- Vertical move: toward goal if in the right direction
-			local correctDir = (off[2] > 0) == (goalZ > cz)
-			if correctDir then towardGoal = towardGoal + remainingZ end
+		if off[2] ~= 0 then
+			if (off[2] > 0) == (goalZ > cz) then
+				towardGoal = towardGoal + math.abs(goalZ - cz)
+			end
 		end
 		table.insert(neighbours, {
 			dx = off[1], dz = off[2],
@@ -61,12 +70,11 @@ function Pathfinder.FindPath(
 
 	if startX == goalX and startZ == goalZ then return {} end
 
-	local function key(x, z) return x * 100000 + z end
-
 	local openSet  = {}
-	local cameFrom = {}   -- key → { px, pz }  (parent tile coords)
+	local cameFrom = {}   -- key → { px, pz }
 	local gScore   = {}
 	local inOpen   = {}
+	local closed   = {}   -- FIX: closed set prevents re-expansion of settled nodes
 
 	local startKey = key(startX, startZ)
 	gScore[startKey] = 0
@@ -78,7 +86,7 @@ function Pathfinder.FindPath(
 	})
 	inOpen[startKey] = true
 
-	local visited = 0
+	local expanded = 0  -- FIX: count unique expansions, not total pops
 
 	while #openSet > 0 do
 		-- Pop node with lowest f (linear scan — acceptable for ≤800-node cap)
@@ -91,31 +99,31 @@ function Pathfinder.FindPath(
 			end
 		end
 
-		local current  = table.remove(openSet, bestIdx)
-		local cx, cz   = current.x, current.z
-		local ck       = key(cx, cz)
-		inOpen[ck]     = nil
-		visited       += 1
+		local current = table.remove(openSet, bestIdx)
+		local cx, cz  = current.x, current.z
+		local ck      = key(cx, cz)
+		inOpen[ck]    = nil
+
+		-- FIX: skip if already expanded (a better path was found and this is stale)
+		if closed[ck] then continue end
+		closed[ck] = true
+		expanded  += 1
 
 		if cx == goalX and cz == goalZ then
-			-- ── Single-pass reconstruction ──────────────────────────────
-			-- Walk cameFrom chain from goal back to start, then reverse.
-			local path  = {}
-			local nodeX = cx
-			local nodeZ = cz
-			-- Always include goal
+			-- Single-pass path reconstruction
+			local path    = {}
+			local nodeX   = cx
+			local nodeZ   = cz
 			table.insert(path, { nodeX, nodeZ })
 			local nodeKey = ck
 			while cameFrom[nodeKey] do
 				local parent = cameFrom[nodeKey]
-				nodeX = parent.px
-				nodeZ = parent.pz
+				nodeX   = parent.px
+				nodeZ   = parent.pz
 				nodeKey = key(nodeX, nodeZ)
-				-- Stop before re-inserting the start node
 				if nodeX == startX and nodeZ == startZ then break end
 				table.insert(path, { nodeX, nodeZ })
 			end
-			-- Reverse so path goes start→goal (start excluded, goal included)
 			local lo, hi = 1, #path
 			while lo < hi do
 				path[lo], path[hi] = path[hi], path[lo]
@@ -125,15 +133,19 @@ function Pathfinder.FindPath(
 			return path
 		end
 
-		if visited >= maxNodes then
+		if expanded >= maxNodes then
 			return nil
 		end
 
 		for _, off in ipairs(orderedNeighbours(cx, cz, goalX, goalZ)) do
 			local nx, nz = cx + off.dx, cz + off.dz
+			local nk     = key(nx, nz)
+
+			-- FIX: skip closed neighbours — their optimal path is already known
+			if closed[nk] then continue end
+
 			if isWalkable(nx, nz) then
-				local nk     = key(nx, nz)
-				local tentG  = (gScore[ck] or math.huge) + 1
+				local tentG = (gScore[ck] or math.huge) + 1
 				if tentG < (gScore[nk] or math.huge) then
 					cameFrom[nk] = { px = cx, pz = cz }
 					gScore[nk]   = tentG

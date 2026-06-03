@@ -20,6 +20,11 @@ local skillStore = DataStoreService:GetDataStore("Skills_v1")
 
 local SkillService = {}
 
+-- ─── Constants ─────────────────────────────────────────────────────────────────
+-- Rucoy starts all skills at level 5. Match that here.
+local STARTING_STAT_LEVEL = 5
+local STARTING_STAT_XP   = Skills.STAT_XP_TABLE[STARTING_STAT_LEVEL]
+
 -- ─── Per-player skill state ───────────────────────────────────────────────────
 -- skillData[userId] = { Attack = { totalXP = 0 }, Defense = { totalXP = 0 } }
 -- totalXP = cumulative stat ticks (1 per hit / per damage taken)
@@ -27,8 +32,8 @@ local skillData = {}
 
 local function initPlayer(player: Player)
 	skillData[player.UserId] = {
-		[Skills.ATTACK]  = { totalXP = 0 },
-		[Skills.DEFENSE] = { totalXP = 0 },
+		[Skills.ATTACK]  = { totalXP = STARTING_STAT_XP },
+		[Skills.DEFENSE] = { totalXP = STARTING_STAT_XP },
 	}
 end
 

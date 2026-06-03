@@ -19,19 +19,39 @@ local ItemData = require(ReplicatedStorage.Modules.ItemData)
 local Remotes          = ReplicatedStorage:WaitForChild("Remotes")
 local ItemDropped      = Remotes:WaitForChild("ItemDropped")
 local InventoryUpdated = Remotes:WaitForChild("InventoryUpdated")
+local EquipmentUpdated = Remotes:WaitForChild("EquipmentUpdated")
 
 local inventoryStore = DataStoreService:GetDataStore("Inventory_v1")
 
 local LootService = {}
 
+-- ─── Equipment slot definitions ────────────────────────────────────────────────
+local EQUIP_SLOTS = {
+	weapon = true, offhand = true,
+	helmet = true, chest  = true,
+	legs   = true, boots  = true,
+}
+local ATK_SLOTS   = { weapon = true, offhand = true }
+local DEF_SLOTS   = { helmet = true, chest = true, legs = true, boots = true }
+
 -- ─── In-memory inventory ──────────────────────────────────────────────────────
-local inventories = {}
+local inventories = {}  -- userId → { [itemId] = itemData }
+
+-- ─── In-memory equipment ──────────────────────────────────────────────────────
+local equipment = {}    -- userId → { [slot] = itemData }
 
 local function getInventory(player: Player)
 	if not inventories[player.UserId] then
 		inventories[player.UserId] = {}
 	end
 	return inventories[player.UserId]
+end
+
+local function getEquipment(player: Player)
+	if not equipment[player.UserId] then
+		equipment[player.UserId] = {}
+	end
+	return equipment[player.UserId]
 end
 
 -- ─── Item ID generator ────────────────────────────────────────────────────────
@@ -192,15 +212,128 @@ local function spawnWorldDrop(item: table, worldPos: Vector3, tx: number, tz: nu
 	worldDrops[item.id] = { part = part, item = item, tileX = tx, tileZ = tz, killerId = killerId }
 end
 
+-- ─── Serialize inventory + equipped items (for client display) ─────────────────
+local function serializeInventory(player: Player): { table }
+	local inv = getInventory(player)
+	local eq  = getEquipment(player)
+	local result = {}
+	for _, item in pairs(inv) do
+		table.insert(result, item)
+	end
+	for _, item in pairs(eq) do
+		local entry = table.clone(item)
+		entry.equipped = true
+		table.insert(result, entry)
+	end
+	return result
+end
+
 -- ─── Give item to player ──────────────────────────────────────────────────────
 local function giveItem(player: Player, item: table)
 	local inv = getInventory(player)
 	inv[item.id] = item
-	local serialized = {}
-	for _, it in pairs(inv) do
-		table.insert(serialized, it)
+	InventoryUpdated:FireClient(player, serializeInventory(player))
+end
+
+-- ─── Fire equipment update to client ──────────────────────────────────────────
+local function fireEquipmentUpdate(player: Player)
+	local eq = getEquipment(player)
+	EquipmentUpdated:FireClient(player, eq)
+end
+
+-- ─── Equip an item from inventory ─────────────────────────────────────────────
+function LootService.EquipItem(player: Player, itemId: string): boolean
+	local inv = getInventory(player)
+	local item = inv[itemId]
+	if not item then
+		print("[EquipItem] FAIL: item not in inventory:", itemId)
+		return false
 	end
-	InventoryUpdated:FireClient(player, serialized)
+	if not EQUIP_SLOTS[item.slot] then
+		print("[EquipItem] FAIL: invalid slot:", item.slot, "for item:", itemId)
+		return false
+	end
+
+	local eq = getEquipment(player)
+
+	-- If slot already occupied, swap the old item back to inventory
+	local oldItem = eq[item.slot]
+	if oldItem then
+		inv[oldItem.id] = oldItem
+	end
+
+	-- Move item from inventory to equipped slot
+	inv[itemId] = nil
+	eq[item.slot] = item
+
+	print("[EquipItem] Equipped", itemId, "(" .. item.name .. ", slot=" .. item.slot .. ")")
+	local snapshot = {}
+	for s, it in pairs(eq) do snapshot[s] = it.id .. "(" .. it.name .. ")" end
+	print("[EquipItem] Equipment after:", snapshot)
+
+	fireEquipmentUpdate(player)
+	InventoryUpdated:FireClient(player, serializeInventory(player))
+
+	return true
+end
+
+-- ─── Unequip an item from a slot ──────────────────────────────────────────────
+function LootService.UnequipItem(player: Player, slot: string): boolean
+	if not EQUIP_SLOTS[slot] then
+		print("[UnequipItem] FAIL: invalid slot:", slot)
+		return false
+	end
+	local eq = getEquipment(player)
+	local item = eq[slot]
+	if not item then
+		print("[UnequipItem] FAIL: nothing equipped in slot:", slot)
+		return false
+	end
+
+	eq[slot] = nil
+
+	-- Return item to inventory
+	local inv = getInventory(player)
+	inv[item.id] = item
+
+	print("[UnequipItem] Unequipped", item.id, "(" .. item.name .. ") from slot", slot)
+	local snapshot = {}
+	for s, it in pairs(eq) do snapshot[s] = it.id .. "(" .. it.name .. ")" end
+	print("[UnequipItem] Equipment after:", snapshot)
+
+	fireEquipmentUpdate(player)
+	InventoryUpdated:FireClient(player, serializeInventory(player))
+
+	return true
+end
+
+-- ─── Query equipped weapon ATK ────────────────────────────────────────────────
+function LootService.GetEquippedWeaponAttack(player: Player): number
+	local eq = getEquipment(player)
+	local total = 0
+	for slot, item in pairs(eq) do
+		if ATK_SLOTS[slot] and item.statType == "atk" then
+			total += item.stat
+		end
+	end
+	return total
+end
+
+-- ─── Query equipped armor DEF ─────────────────────────────────────────────────
+function LootService.GetEquippedArmorDefense(player: Player): number
+	local eq = getEquipment(player)
+	local total = 0
+	for slot, item in pairs(eq) do
+		if DEF_SLOTS[slot] and item.statType == "def" then
+			total += item.stat
+		end
+	end
+	return total
+end
+
+-- ─── Get full equipment table ─────────────────────────────────────────────────
+function LootService.GetEquipment(player: Player): { [string]: table }
+	return getEquipment(player)
 end
 
 -- ─── Remove world drop ────────────────────────────────────────────────────────
@@ -289,12 +422,7 @@ end
 
 -- ─── Public: get serialized inventory ────────────────────────────────────────
 function LootService.GetInventory(player: Player): { table }
-	local inv = getInventory(player)
-	local serialized = {}
-	for _, item in pairs(inv) do
-		table.insert(serialized, item)
-	end
-	return serialized
+	return serializeInventory(player)
 end
 
 -- ─── Deferred save (stagger writes, avoid DataStore budget spike) ─────────────
@@ -322,24 +450,47 @@ local function flushSaves()
 	end
 end
 
+-- ─── Persistence helpers ──────────────────────────────────────────────────────
+local function packSaveData(userId: number): table
+	local inv = inventories[userId] or {}
+	local eq  = equipment[userId] or {}
+	return {
+		inventory = inv,
+		equipment = eq,
+	}
+end
+
+local function unpackSaveData(userId: number, data: table)
+	-- Support legacy flat-format saves (pre-equipment system)
+	if data.inventory ~= nil or data.equipment ~= nil then
+		inventories[userId] = data.inventory or {}
+		equipment[userId]   = data.equipment or {}
+	else
+		-- Legacy: data IS the inventory table directly
+		inventories[userId] = data
+		equipment[userId]   = {}
+	end
+end
+
 -- ─── Player lifecycle ─────────────────────────────────────────────────────────
 Players.PlayerAdded:Connect(function(player)
 	local ok, result = pcall(function()
 		return inventoryStore:GetAsync(tostring(player.UserId))
 	end)
 	if ok and type(result) == "table" then
-		inventories[player.UserId] = result
+		unpackSaveData(player.UserId, result)
 	else
 		inventories[player.UserId] = {}
+		equipment[player.UserId]   = {}
 	end
 	refreshIdCounter()
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-	local inv = inventories[player.UserId]
+	local data = packSaveData(player.UserId)
 	inventories[player.UserId] = nil
-	if not inv then return end
-	scheduleSave(player.UserId, inv)
+	equipment[player.UserId]   = nil
+	scheduleSave(player.UserId, data)
 end)
 
 -- Handle Studio stop button / server shutdown
@@ -353,9 +504,10 @@ for _, player in ipairs(Players:GetPlayers()) do
 		return inventoryStore:GetAsync(tostring(player.UserId))
 	end)
 	if ok and type(result) == "table" then
-		inventories[player.UserId] = result
+		unpackSaveData(player.UserId, result)
 	else
 		inventories[player.UserId] = {}
+		equipment[player.UserId]   = {}
 	end
 end
 refreshIdCounter()
@@ -364,6 +516,24 @@ refreshIdCounter()
 local GetInventoryFn = Remotes:WaitForChild("GetInventory")
 GetInventoryFn.OnServerInvoke = function(player: Player)
 	return LootService.GetInventory(player)
+end
+
+-- ─── Equip/Unequip RemoteEvents ──────────────────────────────────────────────
+local EquipRequest   = Remotes:WaitForChild("EquipRequest")
+local UnequipRequest = Remotes:WaitForChild("UnequipRequest")
+
+EquipRequest.OnServerEvent:Connect(function(player: Player, itemId: string)
+	LootService.EquipItem(player, itemId)
+end)
+
+UnequipRequest.OnServerEvent:Connect(function(player: Player, slot: string)
+	LootService.UnequipItem(player, slot)
+end)
+
+-- ─── GetEquipment RemoteFunction ──────────────────────────────────────────────
+local GetEquipmentFn = Remotes:WaitForChild("GetEquipment")
+GetEquipmentFn.OnServerInvoke = function(player: Player)
+	return LootService.GetEquipment(player)
 end
 
 -- ─── Init folder ──────────────────────────────────────────────────────────────

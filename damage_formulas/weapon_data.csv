@@ -1,0 +1,50 @@
+Name,Level,Attack,Dropped_by,Notes
+Dagger,,15,Goblin Lv.15,
+Dagger,,17,Goblin Lv.15,
+Dagger,,19,Goblin Lv.15,
+Short Sword,25,20,"Mummy Lv.25; Pharaoh Lv.35; Assassin Lv.45; Assassin Lv.50; Assassin Ninja Lv.55",
+Short Sword,25,22,"Mummy Lv.25; Pharaoh Lv.35; Assassin Lv.45; Assassin Lv.50; Assassin Ninja Lv.55",
+Short Sword,25,24,"Mummy Lv.25; Pharaoh Lv.35; Assassin Lv.45; Assassin Lv.50; Assassin Ninja Lv.55",
+Sword,75,25,Skeleton Warrior Lv.90,
+Sword,75,27,Skeleton Warrior Lv.90,
+Sword,75,29,Skeleton Warrior Lv.90,
+Broadsword,125,30,Drows,
+Broadsword,125,32,Drows,
+Broadsword,125,34,Drows,
+Broadsword,125,34,Drows,
+Lizard Slayer,175,35,Lizards,
+Lizard Slayer,175,37,Lizards,
+Lizard Slayer,175,39,Lizards,Requires 2 Lizard Slayer / 2 Lizard Jewel
+Lizard Slayer,175,41,,"Requires 3 Lizard Slayer / 3 Lizard Jewel; Melee: 1"
+Lizard Slayer,175,43,,"Requires 4 Lizard Slayer / 4 Lizard Jewel; Melee: 2"
+Gargoyle Slayer,175,35,"Gargoyle Lv.190",
+Gargoyle Slayer,175,37,"Gargoyle Lv.190",
+Gargoyle Slayer,175,39,"Gargoyle Lv.190","Requires 2 Gargoyle Slayer / 2 Gargoyle Jewel"
+Gargoyle Slayer,175,41,,"Requires 3 Gargoyle Slayer / 3 Gargoyle Jewel; Melee: 1"
+Gargoyle Slayer,175,43,,"Requires 4 Gargoyle Slayer / 4 Gargoyle Jewel; Melee: 2"
+Minotaur Slayer,275,40,Minotaur Lv.250,"Melee: 1"
+Minotaur Slayer,275,42,Minotaur Lv.250,"Melee: 2"
+Minotaur Slayer,275,44,Minotaur Lv.250,"Requires 2 Minotaur Slayer / 2 Minotaur Jewel; Melee: 3"
+Minotaur Slayer,275,46,,"Requires 3 Minotaur Slayer / 3 Minotaur Jewel; Melee: 4"
+Minotaur Slayer,275,48,,"Requires 4 Minotaur Slayer / 4 Minotaur Jewel; Melee: 5"
+Dragon Slayer,275,40,Dragon Lv.250,"Melee: 1"
+Dragon Slayer,275,42,Dragon Lv.250,"Melee: 2"
+Dragon Slayer,275,44,Dragon Lv.250,"Requires 2 Dragon Slayer / 2 Dragon Jewel; Melee: 3"
+Dragon Slayer,275,46,,"Requires 3 Dragon Slayer / 3 Dragon Jewel; Melee: 4"
+Dragon Slayer,275,48,,"Requires 4 Dragon Slayer / 4 Dragon Jewel; Melee: 5"
+Icy Slayer,375,45,"Ice Dragon or Yeti","Melee: 1"
+Icy Slayer,375,47,"Ice Dragon or Yeti","Melee: 2"
+Icy Slayer,375,49,"Ice Dragon or Yeti","Requires 2 Icy Slayer / 2 Frozen Jewel; Melee: 3"
+Icy Slayer,375,51,,"Requires 3 Icy Slayer / 3 Frozen Jewel; Melee: 4"
+Icy Slayer,375,53,,"Requires 4 Icy Slayer / 4 Frozen Jewel; Melee: 5"
+Lava Broadsword,375,45,Orthrus Lv.400,"Melee: 1"
+Lava Broadsword,375,47,Orthrus Lv.400,"Melee: 2"
+Lava Broadsword,375,49,Orthrus Lv.400,"Requires 2 Lava Broadsword / 2 Lava Jewel; Melee: 3"
+Lava Broadsword,375,51,,"Requires 3 Lava Broadsword / 3 Lava Jewel; Melee: 4"
+Lava Broadsword,375,53,,"Requires 4 Lava Broadsword / 4 Lava Jewel; Melee: 5"
+Golden Broadsword,450,50,Demon Lv.450,"Melee: 1"
+Golden Broadsword,450,52,Demon Lv.450,"Melee: 2"
+Golden Broadsword,450,54,Demon Lv.450,"Requires 2 Golden Broadsword / 2 Golden Jewel; Melee: 3"
+Golden Broadsword,450,56,"La Calaca; Haunted Willow","Requires 3 Golden Broadsword / 3 Golden Jewel; Melee: 4"
+Golden Broadsword,450,58,Haunted Willow,"Requires 4 Golden Broadsword / 4 Golden Jewel; Melee: 5"
+Golden Broadsword,450,60,,"Melee: 10; Requires 2 Golden Broadsword / 1 Rusted Golden Broadsword / 3 Boss Jewel"

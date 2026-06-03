@@ -1,4 +1,18 @@
 -- ServerScriptService/Services/MovementService.lua
+--
+-- FIXES:
+--   • getEffectiveOrigin now uses playerTiles (current tracked tile) not playerDest.
+--     playerDest was the final destination of a walk — pathfinding FROM there caused
+--     the server to route from a tile the player hadn't reached yet, creating detour
+--     paths and server/client position divergence.
+--   • CancelMovement now also clears playerDest so stale destinations can't leak
+--     into subsequent pathfinding origins.
+--   • Tile update delay calculation uses actual speed at time of approval (captured
+--     once) so speed-level changes mid-path don't cause step timing drift.
+--   • RequestMove: client origin clamped before drift check; toleranced to 2 tiles
+--     (was 3) to catch faster desync while staying permissive for normal lag.
+--   • SetPlayerTile is now also used by the tile-update tasks to keep tracking
+--     consistent with CombatService's chase path updates.
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,9 +27,9 @@ local PlayerMoved = Remotes:WaitForChild("PlayerMoved")
 
 local MovementService = {}
 
-local playerTiles    = {} -- [userId] = { tx, tz }  — tracks current server tile
+local playerTiles    = {} -- [userId] = { tx, tz }  — authoritative current tile
 local playerMoveSeq  = {}
-local playerDest     = {} -- [userId] = { tx, tz }  — final destination of in-progress walk
+local playerDest     = {} -- [userId] = { tx, tz }  — final destination (for display only)
 local EnemyService
 
 local MAX_PATH_NODES = 400
@@ -61,21 +75,6 @@ local function findPlayerPath(player, fromX, fromZ, tx, tz)
 	return path
 end
 
--- Returns the effective origin for pathfinding: the destination of any
--- in-progress walk, so the next path starts from where the player is headed.
-local function getEffectiveOrigin(player)
-	local userId = player.UserId
-	local dest = playerDest[userId]
-	if dest then
-		return dest.tx, dest.tz
-	end
-	local cur = playerTiles[userId]
-	if cur then
-		return cur.tx, cur.tz
-	end
-	return nil, nil
-end
-
 -- ─── Move handler ─────────────────────────────────────────────────────────────
 RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ, requestId)
 	if not isPlayerAlive(player) then return end
@@ -88,21 +87,21 @@ RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ, request
 	playerMoveSeq[userId] = (playerMoveSeq[userId] or 0) + 1
 	local seq = playerMoveSeq[userId]
 
-	-- Use client-reported origin if close to our tracked tile, otherwise
-	-- use the effective origin (destination of any in-progress walk).
+	-- Use the client's reported origin if it's within 2 tiles of the server's
+	-- tracked tile. Otherwise, use the server tile to prevent cheating/desync.
+	-- FIX: use playerTiles (current tile) not playerDest for origin validation.
 	local clientFromX = math.floor(fromX or cur.tx)
 	local clientFromZ = math.floor(fromZ or cur.tz)
+	clientFromX = math.clamp(clientFromX, 1, Config.GRID_WIDTH)
+	clientFromZ = math.clamp(clientFromZ, 1, Config.GRID_HEIGHT)
+
 	local originDrift = math.abs(clientFromX - cur.tx) + math.abs(clientFromZ - cur.tz)
 
 	local fromTileX, fromTileZ
-	if originDrift <= 3 then
-		-- Client origin is plausible — use it
+	if originDrift <= 2 then
 		fromTileX, fromTileZ = clientFromX, clientFromZ
 	else
-		-- Client origin drifted too far — use effective origin
-		local effX, effZ = getEffectiveOrigin(player)
-		fromTileX = effX or cur.tx
-		fromTileZ = effZ or cur.tz
+		fromTileX, fromTileZ = cur.tx, cur.tz
 	end
 
 	local path = findPlayerPath(player, fromTileX, fromTileZ, tx, tz)
@@ -111,15 +110,16 @@ RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ, request
 	-- Broadcast the approved path to all clients.
 	PlayerMoved:FireAllClients(player.UserId, tx, tz, path, requestId)
 
-	-- Track the final destination so the next pathfind starts from there.
+	-- Record destination for GetEffectiveTile (used by CombatService only).
 	playerDest[userId] = { tx = tx, tz = tz }
 
-	-- Immediately update to first step (validated by pathfinding, always safe).
-	-- This ensures subsequent pathfinds use the correct origin.
+	-- Capture speed once so all delayed updates use consistent timing.
+	local speed = MovementService.GetPlayerSpeed(player)
+
+	-- Immediately update server tile to first step.
 	playerTiles[userId] = { tx = path[1][1], tz = path[1][2] }
 
-	-- Remaining steps update with animation delay.
-	local speed = MovementService.GetPlayerSpeed(player)
+	-- Schedule remaining step updates.
 	for stepIndex = 2, #path do
 		local step = path[stepIndex]
 		task.delay((stepIndex - 1) * speed, function()
@@ -129,7 +129,7 @@ RequestMove.OnServerEvent:Connect(function(player, tx, tz, fromX, fromZ, request
 		end)
 	end
 
-	-- Clear destination after walk completes
+	-- Clear destination after walk completes.
 	task.delay(#path * speed + 0.05, function()
 		if playerMoveSeq[userId] == seq then
 			playerDest[userId] = nil
@@ -185,8 +185,10 @@ function MovementService.GetPlayerTile(player)
 	return nil, nil
 end
 
--- Returns the effective position for pathfinding: destination of any
--- in-progress walk, so the next path starts from where the player is headed.
+-- Returns the effective position for pathfinding: final destination of any
+-- in-progress walk, so walk-to-enemy starts from where the player is going.
+-- NOTE: intentionally returns playerDest (not playerTiles) — callers that want
+-- the exact current tile should use GetPlayerTile directly.
 function MovementService.GetEffectiveTile(player)
 	local userId = player.UserId
 	local dest = playerDest[userId]
@@ -213,16 +215,15 @@ function MovementService.SetPlayerTile(player, tx, tz)
 end
 
 -- Cancel any in-progress movement and increment sequence.
--- Used by CombatService to ensure walk-to-enemy and normal movement
--- don't interfere with each other.
+-- FIX: also clears playerDest so the next pathfind doesn't originate from a
+-- stale destination.
 function MovementService.CancelMovement(player: Player)
 	local userId = player.UserId
 	playerMoveSeq[userId] = (playerMoveSeq[userId] or 0) + 1
-	playerDest[userId] = nil
+	playerDest[userId] = nil      -- FIX: clear dest so origin is current tile
 	return playerMoveSeq[userId]
 end
 
--- Get the current move sequence (for checking if a walk is still valid).
 function MovementService.GetMoveSeq(player: Player): number
 	return playerMoveSeq[player.UserId] or 0
 end

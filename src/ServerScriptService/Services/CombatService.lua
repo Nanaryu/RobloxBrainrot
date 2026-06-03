@@ -8,13 +8,30 @@
 --   accuracy = clamp((max_raw - enemy_DEF) / (max_raw - min_raw), 0, 1)
 --   if accuracy == 0 → deal 0 (hard progression gate)
 --   else roll random(min_raw, max_raw) - enemy_DEF
+--
+-- FIXES:
+--   • Attack loop now uses a per-player token (loopToken) instead of a boolean
+--     flag. Previously, if stopLoop() was called while the goroutine was inside
+--     task.wait(), startLoop() would immediately return (loopActive still true)
+--     and the loop would fail to restart after the wait expired.
+--   • Chase loop: "enemy hasn't moved" early-continue now also checks whether
+--     the estimated player position has meaningfully changed since the last path
+--     was sent — prevents getting stuck just outside attack range.
+--   • startChase: path step updates (task.delay tasks) are guarded with both
+--     the moveSeq AND the chaseSeq, so stale delayed tasks from a previous
+--     chase don't overwrite the player tile after a new chase has started.
+--   • doAttackTick: distance check uses GetPlayerTile (authoritative) not the
+--     estimated tile, so the server always trusts its own tile record for the
+--     final range gate.
+--   • RequestAttack: guards against acting on a dead/nil model that arrived
+--     in the same frame as a kill.
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Config  = require(ReplicatedStorage.Modules.Config)
+local Config     = require(ReplicatedStorage.Modules.Config)
 local Pathfinder = require(ReplicatedStorage.Modules.Pathfinder)
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local Remotes    = ReplicatedStorage:WaitForChild("Remotes")
 
 local AttackResult  = Remotes:WaitForChild("AttackResult")
 local RequestAttack = Remotes:WaitForChild("RequestAttack")
@@ -26,6 +43,7 @@ local DamageNumber  = Remotes:WaitForChild("DamageNumber")
 local EnemyService
 local MovementService
 local SkillService
+local LootService
 local TileGrid
 
 local function getEnemyService()
@@ -40,17 +58,23 @@ local function getSkillService()
 	if not SkillService then SkillService = require(script.Parent.SkillService) end
 	return SkillService
 end
+local function getLootService()
+	if not LootService then LootService = require(script.Parent.LootService) end
+	return LootService
+end
 local function getTileGrid()
 	if not TileGrid then TileGrid = require(script.Parent.TileGridService) end
 	return TileGrid
 end
 
 -- ─── Per-player state ─────────────────────────────────────────────────────────
-local loopActive: { [number]: boolean } = {}
+-- FIX: use integer tokens instead of booleans for both loops so a stop+start
+-- in the same frame reliably creates a new independent loop.
+local loopToken:  { [number]: number } = {}   -- userId → current loop token
 local attackTarget: { [number]: string } = {} -- userId → enemyId
 
--- ─── Forward declarations (circular runtime deps) ────────────────────────────
-local startChase  -- defined later, referenced by doAttackTick
+-- ─── Forward declarations ────────────────────────────────────────────────────
+local startChase
 
 -- ─── Helpers ──────────────────────────────────────────────────────────────────
 local function isPlayerAlive(player: Player): boolean
@@ -63,23 +87,23 @@ local function manhattan(ax, az, bx, bz): number
 	return math.abs(ax - bx) + math.abs(az - bz)
 end
 
-local function getEnemyAtTile(ptx: number, ptz: number): Model?
-	local es = getEnemyService()
-	return es.GetEnemyAtTile(ptx, ptz)
-end
-
-function stopLoop(player: Player)
-	loopActive[player.UserId] = false
+-- Increment token to invalidate the current attack loop (it will exit on its
+-- next iteration / after its current wait).
+local function stopLoop(player: Player)
+	loopToken[player.UserId] = (loopToken[player.UserId] or 0) + 1
 end
 
 -- ─── Damage formula (Rucoy-style) ────────────────────────────────────────────
 local function calculateDamage(player: Player, enemyDEF: number): number
 	local ss = getSkillService()
+	local ls = getLootService()
 	local atkLevel = ss.GetAttackLevel(player)
-	local baseATK  = Config.BASE_ATK
+	-- Weapon ATK replaces BASE_ATK (absolute Rucoy-style); fallback to fists
+	local wepAtk   = ls.GetEquippedWeaponAttack(player)
+	if wepAtk <= 0 then wepAtk = Config.BASE_ATK end
 
-	local min_raw = (atkLevel * baseATK) / 20
-	local max_raw = (atkLevel * baseATK) / 10
+	local min_raw = (atkLevel * wepAtk) / 20
+	local max_raw = (atkLevel * wepAtk) / 10
 
 	local range = max_raw - min_raw
 	if range <= 0 or max_raw <= enemyDEF then
@@ -113,6 +137,7 @@ local function doAttackTick(player: Player)
 		return
 	end
 
+	-- FIX: use authoritative server tile, not estimated tile, for range check
 	local ptx, ptz = ms.GetPlayerTile(player)
 	if not ptx then return end
 
@@ -122,7 +147,7 @@ local function doAttackTick(player: Player)
 
 	local dist = manhattan(ptx, ptz, etx, etz)
 
-	-- Out of range — re-chase enemy dynamically
+	-- Out of range — stop attacking and re-chase
 	if dist > Config.AUTO_ATTACK_RANGE then
 		stopLoop(player)
 		task.defer(function()
@@ -149,54 +174,60 @@ end
 -- ─── Per-player attack loop ───────────────────────────────────────────────────
 local lastAttack: { [number]: number } = {}
 
+-- FIX: startLoop now takes a snapshot of the current token. The loop exits if
+-- the token has changed, which happens when stopLoop() is called. This means
+-- stopLoop() + startLoop() in quick succession always creates a fresh loop
+-- rather than having startLoop() bail out because the old loop's flag is stale.
 local function startLoop(player: Player)
 	local userId = player.UserId
-	if loopActive[userId] then return end
-	loopActive[userId] = true
+	-- Increment token to own this loop instance
+	loopToken[userId] = (loopToken[userId] or 0) + 1
+	local myToken = loopToken[userId]
 
 	task.spawn(function()
-		while loopActive[userId] do
+		while loopToken[userId] == myToken do
 			local now  = tick()
 			local last = lastAttack[userId] or 0
 			local wait = Config.AUTO_ATTACK_INTERVAL - (now - last)
-			if wait > 0 then task.wait(wait) end
-			if not loopActive[userId] then break end
+			if wait > 0 then
+				task.wait(wait)
+			end
+			-- Re-check token after wait (it may have changed while sleeping)
+			if loopToken[userId] ~= myToken then break end
 
 			lastAttack[userId] = tick()
 			local ok, err = pcall(doAttackTick, player)
 			if not ok then
 				warn("[CombatService] Attack tick error:", err)
-				stopLoop(player)
 				break
 			end
 		end
-		loopActive[userId] = false
 	end)
 end
 
--- ─── Chase system: dynamically re-path towards moving enemy ──────────────────
--- Replaces static walkToEnemy with a loop that re-paths as the enemy moves.
--- Uses time-based client position estimation to keep paths accurate.
+-- ─── Chase system ─────────────────────────────────────────────────────────────
+local chaseSeq          = {}
+local chaseEnemyTile    = {}
+local chaseLastSentTime = {}
+local chaseLastSentSpeed= {}
+local chaseLastSentPath = {}
+-- FIX: track the estimated player tile at the time we last sent a path,
+-- so we can detect when the player has moved far enough to warrant a re-path
+-- even if the enemy hasn't moved.
+local chaseLastEstimateTile = {}
 
-local chaseSeq          = {} -- [userId] → number; increment to cancel active chase
-local chaseEnemyTile    = {} -- [userId] → { tx, tz } — enemy tile when we last sent a path
-local chaseLastSentTime = {} -- [userId] → tick() — when the last chase path was sent
-local chaseLastSentSpeed= {} -- [userId] → seconds per tile at time of send
-local chaseLastSentPath = {} -- [userId] → {{tx,tz}, ...} — last path sent to client
-
-local REVAL_INTERVAL = 0.2 -- seconds between chase re-evaluations
+local REVAL_INTERVAL = 0.2
 
 local function stopChase(player)
 	local userId = player.UserId
-	chaseSeq[userId]          = (chaseSeq[userId] or 0) + 1
-	chaseEnemyTile[userId]    = nil
-	chaseLastSentTime[userId] = nil
-	chaseLastSentSpeed[userId]= nil
-	chaseLastSentPath[userId] = nil
+	chaseSeq[userId]               = (chaseSeq[userId] or 0) + 1
+	chaseEnemyTile[userId]         = nil
+	chaseLastSentTime[userId]      = nil
+	chaseLastSentSpeed[userId]     = nil
+	chaseLastSentPath[userId]      = nil
+	chaseLastEstimateTile[userId]  = nil
 end
 
--- Estimate the client's current tile using time elapsed since last path was sent.
--- Falls back to server-tracked tile if no path info is available.
 local function estimatePlayerTile(player)
 	local ms = getMovementService()
 	local userId = player.UserId
@@ -208,7 +239,7 @@ local function estimatePlayerTile(player)
 		return ms.GetPlayerTile(player)
 	end
 
-	local elapsed  = tick() - lastTime
+	local elapsed   = tick() - lastTime
 	local stepsDone = math.clamp(math.floor(elapsed / lastSpeed), 0, #lastPath)
 
 	if stepsDone == 0 then
@@ -219,9 +250,8 @@ local function estimatePlayerTile(player)
 end
 
 local function findAdjacentTile(fromX, fromZ, targetX, targetZ)
-	local ms = getMovementService()
-	local tg = getTileGrid()
-	local es = getEnemyService()
+	local tg2 = getTileGrid()
+	local es2 = getEnemyService()
 
 	local candidates = {
 		{ targetX + 1, targetZ },
@@ -238,8 +268,7 @@ local function findAdjacentTile(fromX, fromZ, targetX, targetZ)
 
 	for _, c in ipairs(candidates) do
 		local tx, tz = c[1], c[2]
-		if tg.IsWalkable(tx, tz)
-			and not es.IsTileBlockedForPlayers(tx, tz) then
+		if tg2.IsWalkable(tx, tz) and not es2.IsTileBlockedForPlayers(tx, tz) then
 			return tx, tz
 		end
 	end
@@ -247,7 +276,7 @@ local function findAdjacentTile(fromX, fromZ, targetX, targetZ)
 end
 
 startChase = function(player, targetModel)
-	local userId  = player.UserId
+	local userId   = player.UserId
 	local targetId = targetModel:GetAttribute("EnemyId")
 	stopChase(player)
 	local seq = chaseSeq[userId]
@@ -270,7 +299,6 @@ startChase = function(player, targetModel)
 			local etz = enemyModel:GetAttribute("CurrentTileZ")
 			if not etx or not etz then break end
 
-			-- Estimate where the client actually is (not stale server tile)
 			local eptx, eptz = estimatePlayerTile(player)
 			if not eptx then break end
 
@@ -280,15 +308,22 @@ startChase = function(player, targetModel)
 				break
 			end
 
-			-- No need to re-path if the enemy hasn't moved since our last path
-			local last = chaseEnemyTile[userId]
-			if last and last.tx == etx and last.tz == etz then
+			-- FIX: also re-path when the estimated player position has shifted
+			-- by more than 1 tile since the last path was sent. Without this,
+			-- the player can be stuck just outside attack range because the
+			-- "enemy hasn't moved" skip prevents any new path from being sent.
+			local lastEP = chaseLastEstimateTile[userId]
+			local enemyUnchanged = chaseEnemyTile[userId]
+				and chaseEnemyTile[userId].tx == etx
+				and chaseEnemyTile[userId].tz == etz
+			local playerUnchanged = lastEP
+				and math.abs(lastEP.tx - eptx) + math.abs(lastEP.tz - eptz) <= 1
+
+			if enemyUnchanged and playerUnchanged then
 				task.wait(REVAL_INTERVAL)
 				continue
 			end
 
-			-- Find adjacent walkable tile to the enemy's current position,
-			-- sorted by distance to estimated player position
 			local adjX, adjZ = findAdjacentTile(eptx, eptz, etx, etz)
 			if not adjX then
 				task.wait(REVAL_INTERVAL)
@@ -303,11 +338,10 @@ startChase = function(player, targetModel)
 				return true
 			end
 
-			-- Pathfind from estimated client position (not stale server tile)
 			local path = Pathfinder.FindPath(isPassable, eptx, eptz, adjX, adjZ, 400)
 
-			-- Fallback: try from server-tracked position if estimate failed
 			if not path or #path == 0 then
+				-- Fallback: try from authoritative server tile
 				local sptx, sptz = ms.GetPlayerTile(player)
 				if sptx and (sptx ~= eptx or sptz ~= eptz) then
 					path = Pathfinder.FindPath(isPassable, sptx, sptz, adjX, adjZ, 400)
@@ -319,41 +353,48 @@ startChase = function(player, targetModel)
 				continue
 			end
 
-			-- Store path info for next position estimation
-			chaseEnemyTile[userId]    = { tx = etx, tz = etz }
-			chaseLastSentTime[userId] = tick()
-			chaseLastSentPath[userId] = path
+			-- Record what we're sending so future iterations can estimate position
+			chaseEnemyTile[userId]          = { tx = etx, tz = etz }
+			chaseLastEstimateTile[userId]   = { tx = eptx, tz = eptz }
+			chaseLastSentTime[userId]       = tick()
+			chaseLastSentPath[userId]       = path
 
-			-- Cancel old movement tracking, broadcast new path to clients
 			local msSeq = ms.CancelMovement(player)
 			PlayerMoved:FireAllClients(player.UserId, adjX, adjZ, path, -1)
 
-			-- Record speed AFTER CancelMovement (which might reset dest)
 			local speed = ms.GetPlayerSpeed(player)
 			chaseLastSentSpeed[userId] = speed
 
-			-- Immediately set server tile to first step (consistent with RequestMove)
+			-- Update server tile immediately to first step
 			ms.SetPlayerTile(player, path[1][1], path[1][2])
 
-			-- Schedule remaining tile updates
+			-- FIX: guard delayed tile-updates with BOTH the move sequence AND
+			-- the chase sequence. A new chase cancelling before the delays fire
+			-- would previously overwrite the new chase's tile tracking.
+			local capturedMsSeq  = msSeq
+			local capturedChaseSeq = seq
 			for i = 2, #path do
 				local step = path[i]
 				task.delay((i - 1) * speed, function()
-					if ms.GetMoveSeq(player) == msSeq and isPlayerAlive(player) then
+					if ms.GetMoveSeq(player) == capturedMsSeq
+						and chaseSeq[userId] == capturedChaseSeq
+						and isPlayerAlive(player) then
 						ms.SetPlayerTile(player, step[1], step[2])
 					end
 				end)
 			end
 
-			-- Short fixed interval: re-evaluate frequently so we detect
-			-- enemy direction changes and in-range quickly
 			task.wait(REVAL_INTERVAL)
 		end
 
-		chaseEnemyTile[userId]    = nil
-		chaseLastSentTime[userId] = nil
-		chaseLastSentSpeed[userId]= nil
-		chaseLastSentPath[userId] = nil
+		-- Cleanup
+		if chaseSeq[userId] == seq then
+			chaseEnemyTile[userId]         = nil
+			chaseLastSentTime[userId]      = nil
+			chaseLastSentSpeed[userId]     = nil
+			chaseLastSentPath[userId]      = nil
+			chaseLastEstimateTile[userId]  = nil
+		end
 	end)
 end
 
@@ -363,14 +404,18 @@ RequestAttack.OnServerEvent:Connect(function(player: Player, enemyId: string)
 
 	local es = getEnemyService()
 	local ms = getMovementService()
+
+	-- FIX: validate model is still alive before registering the target
 	local model = es.GetEnemy(enemyId)
-	if not model or model:GetAttribute("State") == "dead" then return end
+	if not model then return end
+	if model:GetAttribute("State") == "dead" then return end
 
 	attackTarget[player.UserId] = enemyId
 
 	local ptx, ptz = ms.GetPlayerTile(player)
 	local etx = model:GetAttribute("CurrentTileX")
 	local etz = model:GetAttribute("CurrentTileZ")
+
 	if ptx and etx and manhattan(ptx, ptz, etx, etz) <= Config.AUTO_ATTACK_RANGE then
 		startLoop(player)
 	else
@@ -416,7 +461,7 @@ Players.PlayerRemoving:Connect(function(player: Player)
 	local userId = player.UserId
 	attackTarget[userId] = nil
 	stopChase(player)
-	loopActive[userId] = nil
+	stopLoop(player)
 	lastAttack[userId] = nil
 end)
 

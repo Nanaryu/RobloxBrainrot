@@ -19,6 +19,9 @@ local EVENTS = {
 	-- Loot
 	"ItemDropped",        -- Server → Client  (itemData, worldPosition)
 	"InventoryUpdated",   -- Server → Client  (serialisedInventory)
+	"EquipmentUpdated",   -- Server → Client  (equipmentTable)
+	"EquipRequest",       -- Client → Server  (itemId)
+	"UnequipRequest",     -- Client → Server  (slot)
 
 	-- Combat (player attacking enemies)
 	"RequestAttack",      -- Client → Server  (enemyId)
@@ -43,6 +46,7 @@ local EVENTS = {
 
 local FUNCTIONS = {
 	"GetInventory",       -- Client → Server, returns serialised inventory table
+	"GetEquipment",       -- Client → Server, returns equipped items table
 	"GetNearbyShops",     -- Client → Server, returns nearby shop list table
 }
 
