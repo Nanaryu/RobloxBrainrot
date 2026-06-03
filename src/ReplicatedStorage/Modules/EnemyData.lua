@@ -39,18 +39,18 @@ EnemyData["Brri Brri Bicus Dicus Bombicus"] = { tier=3, hp=1100, dmg=88,  defens
 EnemyData["Avocadini Guffo"]                = { tier=3, hp=1300, dmg=100, defense=37, speed=10, xp=185, gold={130,200}, lootRarity="Epic" }
 EnemyData["Salamino Penguino"]              = { tier=3, hp=1500, dmg=115, defense=39, speed=10, xp=210, gold={150,230}, lootRarity="Epic" }
 EnemyData["Ti Ti Ti Sahur"]                 = { tier=3, hp=1400, dmg=108, defense=38, speed=10, xp=198, gold={140,215}, lootRarity="Epic" }
-EnemyData["Penguin Tree"]                   = { tier=3, hp=1600, dmg=120, defense=41, speed=10, xp=225, gold={160,245}, lootRarity="Epic" }
+EnemyData["Antonio"]                   = { tier=3, hp=1600, dmg=120, defense=41, speed=10, xp=225, gold={160,245}, lootRarity="Epic" }
 EnemyData["Penguino Cocosino"]              = { tier=3, hp=1750, dmg=130, defense=43, speed=10, xp=245, gold={175,265}, lootRarity="Epic" }
 
 -- ─── Legendary (tier 4) ──────────────────────────────────────────────────────
 EnemyData["Burbaloni Loliloli"]    = { tier=4, hp=2500,  dmg=180, defense=80,  speed=10, xp=350,  gold={250,400},  lootRarity="Legendary" }
-EnemyData["Chimpazini Bananini"]   = { tier=4, hp=3000,  dmg=210, defense=90,  speed=10, xp=420,  gold={300,480},  lootRarity="Legendary" }
+EnemyData["Chimpanzini Bananini"]   = { tier=4, hp=3000,  dmg=210, defense=90,  speed=10, xp=420,  gold={300,480},  lootRarity="Legendary" }
 EnemyData["Ballerina Cappuccina"]  = { tier=4, hp=5000,  dmg=300, defense=100, speed=11, xp=700,  gold={500,800},  lootRarity="Legendary" }
 EnemyData["Chef Crabracadabra"]    = { tier=4, hp=6500,  dmg=370, defense=110, speed=10, xp=910,  gold={650,1000}, lootRarity="Legendary" }
 EnemyData["Lionel Cactuseli"]      = { tier=4, hp=7500,  dmg=420, defense=115, speed=11, xp=1050, gold={750,1150}, lootRarity="Legendary" }
 EnemyData["Glorbo Fruttodrillo"]   = { tier=4, hp=8500,  dmg=470, defense=120, speed=11, xp=1190, gold={850,1300}, lootRarity="Legendary" }
-EnemyData["Blueberrini Octopusini"]= { tier=4, hp=10000, dmg=550, defense=125, speed=11, xp=1400, gold={1000,1550},lootRarity="Legendary" }
-EnemyData["Strawberelli Flamingelli"]={ tier=4,hp=11000, dmg=600, defense=130, speed=12, xp=1540, gold={1100,1700},lootRarity="Legendary" }
+EnemyData["Blueberrinni Octopusini"]= { tier=4, hp=10000, dmg=550, defense=125, speed=11, xp=1400, gold={1000,1550},lootRarity="Legendary" }
+EnemyData["Strawberrelli Flamingelli"]={ tier=4,hp=11000, dmg=600, defense=130, speed=12, xp=1540, gold={1100,1700},lootRarity="Legendary" }
 EnemyData["Pandaccini Bananini"]   = { tier=4, hp=12000, dmg=650, defense=135, speed=12, xp=1680, gold={1200,1850},lootRarity="Legendary" }
 EnemyData["Cocosini Mama"]         = { tier=4, hp=11500, dmg=625, defense=132, speed=12, xp=1610, gold={1150,1775},lootRarity="Legendary" }
 EnemyData["Sigma Boy"]             = { tier=4, hp=13000, dmg=700, defense=140, speed=12, xp=1820, gold={1300,2000},lootRarity="Legendary" }
