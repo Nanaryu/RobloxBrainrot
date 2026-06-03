@@ -624,20 +624,26 @@ local function processDamageAccumulator()
 			if player and player.Character then
 				local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
 				if humanoid and humanoid.Health > 0 then
-					if not SkillService then
-						SkillService = require(script.Parent.SkillService)
-					end
-					if not LootService then
-						LootService = require(script.Parent.LootService)
-					end
+					-- Skip damage during post-respawn invincibility window
+					local invincibleUntil = player:GetAttribute("InvincibleUntil")
+					if invincibleUntil and tick() < invincibleUntil then
+						-- still consume pending damage, just don't apply it
+					else
+						if not SkillService then
+							SkillService = require(script.Parent.SkillService)
+						end
+						if not LootService then
+							LootService = require(script.Parent.LootService)
+						end
 
-					local defLevel    = SkillService.GetDefenseLevel(player)
-					local armorDef    = LootService.GetEquippedArmorDefense(player)
-					local finalDamage = math.max(1, totalRaw - defLevel - armorDef)
+						local defLevel    = SkillService.GetDefenseLevel(player)
+						local armorDef    = LootService.GetEquippedArmorDefense(player)
+						local finalDamage = math.max(1, totalRaw - defLevel - armorDef)
 
-					humanoid:TakeDamage(finalDamage)
-					TakeDamage:FireClient(player, player.UserId, finalDamage)
-					SkillService.GrantDefenseXP(player, 1)
+						humanoid:TakeDamage(finalDamage)
+						TakeDamage:FireClient(player, player.UserId, finalDamage)
+						SkillService.GrantDefenseXP(player, 1)
+					end
 				end
 			end
 		end

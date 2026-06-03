@@ -2,11 +2,16 @@
 -- Click-to-attack system with hover highlights and walk-to-enemy.
 -- Click enemy → RequestAttack → server walks player to enemy → auto-attack.
 -- Also handles: HP bar sync, screen flash on damage, hit sound.
+-- Skips input when TargetingController (hold-E) is active.
 
 local Players           = game:GetService("Players")
 local TweenService      = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService  = game:GetService("UserInputService")
+local RunService        = game:GetService("RunService")
+
+-- Lazy-loaded reference to new targeting system
+local TargetingController
 
 local Config  = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -22,50 +27,24 @@ local player   = Players.LocalPlayer
 local hrp      = nil
 local humanoid = nil
 
+local function isTargetingActive()
+	if not TargetingController then
+		local ok, mod = pcall(require, script.Parent:WaitForChild("TargetingController"))
+		if ok then TargetingController = mod end
+	end
+	return TargetingController and TargetingController.IsActive()
+end
+
 -- Attack state
 local currentTarget: Model?     = nil
 local currentTargetId: string?  = nil
-local selectionBox: SelectionBox? = nil
 local attackMode = false -- when true, MovementController skips tile clicks
 
--- Hover highlight state
-local hoverHighlight: Highlight? = nil
+-- Hover / lock state
 local hoveredEnemy: Model? = nil
-
--- ─── Hover helpers (defined early so setupCharacter can call them) ────────────
-local function clearHover()
-	if hoverHighlight then
-		hoverHighlight:Destroy()
-		hoverHighlight = nil
-	end
-	hoveredEnemy = nil
-end
-
-local function setHover(model: Model)
-	clearHover()
-	if not model or not model.Parent then return end
-
-	local adornee = model.PrimaryPart
-	if not adornee then
-		for _, part in ipairs(model:GetDescendants()) do
-			if part:IsA("BasePart") then
-				adornee = part
-				break
-			end
-		end
-	end
-	if not adornee then return end
-
-	hoverHighlight = Instance.new("Highlight")
-	hoverHighlight.Adornee       = model
-	hoverHighlight.FillColor     = Color3.fromRGB(255, 255, 255)
-	hoverHighlight.FillTransparency = 0.85
-	hoverHighlight.OutlineColor  = Color3.fromRGB(255, 255, 200)
-	hoverHighlight.OutlineTransparency = 0.3
-	hoverHighlight.DepthMode     = Enum.HighlightDepthMode.AlwaysOnTop
-	hoverHighlight.Parent        = adornee
-	hoveredEnemy = model
-end
+local arcLocked = false
+local HOVER_COLOR = Color3.fromRGB(0, 220, 255)
+local LOCKED_COLOR = Color3.fromRGB(255, 220, 50)
 
 -- ─── Find enemy model from a BasePart ─────────────────────────────────────────
 local function getEnemyFromPart(part: BasePart): Model?
@@ -79,36 +58,32 @@ local function getEnemyFromPart(part: BasePart): Model?
 	return nil
 end
 
--- ─── Selection box ────────────────────────────────────────────────────────────
-local function clearSelection()
-	if selectionBox then
-		selectionBox:Destroy()
-		selectionBox = nil
+-- ─── Arc indicator management ─────────────────────────────────────────────────
+local function refreshArc()
+	if not TargetingController then return end
+	if arcLocked and currentTarget then
+		local pp = currentTarget.PrimaryPart and currentTarget.PrimaryPart.Position
+			or currentTarget:GetPivot().Position
+		TargetingController.ShowArc(pp, LOCKED_COLOR)
+	elseif hoveredEnemy then
+		local pp = hoveredEnemy.PrimaryPart and hoveredEnemy.PrimaryPart.Position
+			or hoveredEnemy:GetPivot().Position
+		TargetingController.ShowArc(pp, HOVER_COLOR)
+	else
+		TargetingController.HideArc()
 	end
 end
 
-local function setSelection(model: Model)
-	clearSelection()
-	if not model or not model.Parent then return end
+-- ─── Hover helpers ────────────────────────────────────────────────────────────
+local function clearHover()
+	hoveredEnemy = nil
+	refreshArc()
+end
 
-	local adornee = model.PrimaryPart
-	if not adornee then
-		for _, part in ipairs(model:GetDescendants()) do
-			if part:IsA("BasePart") then
-				adornee = part
-				break
-			end
-		end
-	end
-	if not adornee then return end
-
-	selectionBox = Instance.new("SelectionBox")
-	selectionBox.Adornee       = adornee
-	selectionBox.Color3        = Color3.fromRGB(255, 255, 0)
-	selectionBox.LineThickness = 0.05
-	selectionBox.SurfaceColor3 = Color3.fromRGB(255, 255, 200)
-	selectionBox.SurfaceTransparency = 0.85
-	selectionBox.Parent        = adornee
+local function setHover(model: Model)
+	if not model or not model.Parent then clearHover() return end
+	hoveredEnemy = model
+	refreshArc()
 end
 
 -- ─── Target management ────────────────────────────────────────────────────────
@@ -116,14 +91,16 @@ local function setTarget(model: Model?)
 	currentTarget   = model
 	currentTargetId = model and model:GetAttribute("EnemyId") or nil
 	attackMode      = model ~= nil
-	setSelection(model)
+	arcLocked = model ~= nil
+	refreshArc()
 end
 
 local function clearTarget()
 	currentTarget   = nil
 	currentTargetId = nil
 	attackMode      = false
-	clearSelection()
+	arcLocked = false
+	refreshArc()
 end
 
 -- ─── Character setup ──────────────────────────────────────────────────────────
@@ -135,12 +112,20 @@ local function setupCharacter(character)
 	currentTarget   = nil
 	currentTargetId = nil
 	attackMode      = false
-	if selectionBox then selectionBox:Destroy() selectionBox = nil end
+	arcLocked = false
 	clearHover()
 end
 
 player.CharacterAdded:Connect(setupCharacter)
 if player.Character then setupCharacter(player.Character) end
+
+-- ─── Arc position update loop ─────────────────────────────────────────────────
+RunService.RenderStepped:Connect(function()
+	if not humanoid or humanoid.Health <= 0 then return end
+	if not arcLocked and not hoveredEnemy then return end
+	if isTargetingActive() then return end
+	refreshArc()
+end)
 
 -- ─── Sound helper ─────────────────────────────────────────────────────────────
 local function playSound(soundId, parent)
@@ -159,6 +144,7 @@ end
 local mouse = player:GetMouse()
 mouse.Button1Down:Connect(function()
 	if not humanoid or humanoid.Health <= 0 then return end
+	if isTargetingActive() then return end
 
 	local target = mouse.Target
 	if not target then return end
@@ -184,6 +170,10 @@ end)
 -- ─── Hover detection ──────────────────────────────────────────────────────────
 mouse.Move:Connect(function()
 	if not humanoid or humanoid.Health <= 0 then
+		clearHover()
+		return
+	end
+	if isTargetingActive() then
 		clearHover()
 		return
 	end

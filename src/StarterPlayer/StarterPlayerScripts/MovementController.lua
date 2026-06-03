@@ -423,6 +423,16 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
 end)
 
 -- ─── Click-to-move ────────────────────────────────────────────────────────────
+local TargetingController
+
+local function isTargetingActive()
+	if not TargetingController then
+		local ok, mod = pcall(require, script.Parent:WaitForChild("TargetingController"))
+		if ok then TargetingController = mod end
+	end
+	return TargetingController and TargetingController.IsActive()
+end
+
 local function getEnemyFromPart(part)
 	local obj = part
 	while obj do
@@ -437,6 +447,7 @@ end
 local mouse = player:GetMouse()
 mouse.Button1Down:Connect(function()
 	if not isAlive() then return end
+	if isTargetingActive() then return end
 
 	local target = mouse.Target
 	if not target then return end

@@ -50,7 +50,12 @@ BrainrotRPG/
             ├── HUDController.client.lua      ✅  HP bar + Attack/Defense skill bars
             ├── IsoCamera.client.lua          ✅
             ├── DamageNumbers.client.lua      ✅  floating damage numbers
-            └── InventoryController.client.lua ✅ dynamically generates InvSlot instances
+            ├── InventoryController.client.lua ✅ dynamically generates InvSlot instances
+            ├── DeathScreen.client.lua         ✅  death overlay, respawn countdown, invincibility flash
+            └── TargetingController.lua          ✅  hold-E circle-on-chain auto-snap targeting
+    └── StarterGui/
+        └── LoadingGui/
+            └── LoadingClient.client.lua      ✅  loading screen with retry logic
 ```
 
 **Still needed:**
@@ -102,6 +107,8 @@ StarterGui/
 | ELITE_SPAWN_CHANCE | 5 % | |
 | ELITE_STAR_MAX | 5 | |
 | PREMIUM_NAME | "Crystals" | TBD |
+| RESPAWN_DELAY | 5 s | seconds between death and respawn |
+| INVINCIBILITY_DURATION | 3 s | seconds of post-respawn invincibility |
 
 ---
 
@@ -264,6 +271,8 @@ StarterGui/
 | DamageNumber | S→C all | attackerUserId, damage, enemyId |
 | EnemyDied | S→C all | enemyId, worldPosition |
 | EnemyHPUpdate | S→C all | enemyId, currentHP, maxHP |
+| PlayerDied | S→C | — |
+| PlayerRespawn | S→C | — |
 | SkillUpdated | S→C | { Attack={…}, Defense={…} } |
 | ItemDropped | S→C | itemData, worldPosition |
 | InventoryUpdated | S→C | serialisedInventory |
@@ -349,7 +358,8 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [ ] Full DataStore persistence (inventory, equipment)
 - [ ] NPC shop (premium currency)
 - [ ] Offline player shops
-- [ ] Full death/respawn flow polish
+- [x] Full death/respawn flow polish
+- [x] Loading screen with retry logic
 - [ ] Game name
 
 ---
@@ -357,7 +367,7 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 ## 📝 Open Decisions
 - [ ] Game name
 - [ ] Item slots (sword, staff, shield, helmet, chest, legs, boots?)
-- [ ] Respawn mechanic (timer? cost? safe zone?)
+- [x] Respawn mechanic — 5s timer, death screen, 3s invincibility after respawn
 - [ ] Premium currency final name (currently "Crystals")
 - [ ] Offline shop slot limit and duration tiers
 
@@ -385,6 +395,9 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - **Inventory sort stability**: `refreshInventory` sorts by rarity → name → **item ID**. Without the ID tiebreaker, two items with identical name+rarity would swap positions on every rebuild, making equipped item strokes visually jump between identical items.
 - **Equip click reads fresh attributes**: The click handler reads `ItemId`, `ItemEquipped`, `ItemSlot` from the slot Frame's Attributes (not closure-captured `item` table). Attributes are kept in sync by both `refreshInventory` (slot creation) and `refreshEquipment` (stroke updates), ensuring the correct action is taken even if UI is stale.
 - **refreshEquipment brief visual feedback**: `refreshEquipment` fires first (server sends it before `InventoryUpdated`) and updates strokes on existing slot Frames for immediate visual feedback. `refreshInventory` then destroys all slots and recreates from serialized data, providing the authoritative final state.
+- **Death/respawn flow**: `Players.CharacterAutoLoads = false` in Main.server.lua. On `Humanoid.Died`: server fires `PlayerDied`, waits `RESPAWN_DELAY` (5s), destroys old character, calls `player:LoadCharacter()`, fires `PlayerRespawn`, sets `InvincibleUntil` attribute. Client `DeathScreen.client.lua` shows black overlay + countdown on `PlayerDied`, hides on `PlayerRespawn`/`CharacterAdded`. `EnemyService.processDamageAccumulator` checks `InvincibleUntil` to skip damage during the 3s post-respawn window. Existing `CharacterAdded` handlers in MovementService/CombatService/HUDController/IsoCamera handle re-initialization naturally.
+- **Loading screen**: `LoadingClient.client.lua` in `StarterGui/LoadingGui` runs before all other scripts. Shows a branded overlay with progress bar. Validates 6 steps: game engine loaded → core modules (Config, Pathfinder, etc.) → server remotes (RequestMove, PlayerDied, etc.) → world map (Map/TileGrid/Tiles) → enemy spawning → final config sanity check. Each step retries up to 3 times with 1.5s delay before moving on. On total failure (all retries exhausted for a step), restarts the entire sequence from step 1. Fades out on success.
+- **Hold-to-target system**: `TargetingController.lua` provides a hold-E targeting mode. While E is held, a glowing cyan circle-on-chain follows the mouse cursor, connected to the player by a chain of beads + a 3D beam. Auto-snaps to the closest enemy within 60px screen distance with pop particles + sound. Releasing E fires `RequestAttack` to the server if snapped target is within 14 studs. CombatController and MovementController skip click input when targeting is active. Circle turns gold when snapped, pulses, and emits particle bursts on snap/unsnap.
 
 ---
 

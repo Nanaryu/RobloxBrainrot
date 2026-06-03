@@ -15,6 +15,7 @@ local EVENTS = {
 	"EnemyDied",          -- Server → Client  (enemyId, worldPosition)
 	"EnemyHPUpdate",      -- Server → Client  (enemyId, currentHP, maxHP)
 	"PlayerDied",         -- Server → Client  ()
+	"PlayerRespawn",      -- Server → Client  ()
 
 	-- Loot
 	"ItemDropped",        -- Server → Client  (itemData, worldPosition)

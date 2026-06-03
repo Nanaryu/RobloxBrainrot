@@ -1,8 +1,12 @@
 -- ServerScriptService/Core/Main.server.lua
 -- Bootstraps all server services in dependency order.
 
+local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("RequestMove", 10)
+
+-- Disable Roblox default respawning — we handle it manually
+Players.CharacterAutoLoads = false
 
 -- 1. TileGrid first — everything walks on it
 local TileGridService  = require(script.Parent.Parent.Services.TileGridService)
@@ -29,3 +33,57 @@ local CombatService    = require(script.Parent.Parent.Services.CombatService)
 local LeaderboardService = require(script.Parent.Leaderboard)
 
 print("[Main] All services loaded.")
+
+-- ─── Death / Respawn ──────────────────────────────────────────────────────────
+local Config    = require(ReplicatedStorage.Modules.Config)
+local Remotes   = ReplicatedStorage:WaitForChild("Remotes")
+local PlayerDied    = Remotes:WaitForChild("PlayerDied")
+local PlayerRespawn = Remotes:WaitForChild("PlayerRespawn")
+
+local respawning = {} -- [userId] = true while death timer is running
+
+local function setupDeathHandler(player: Player)
+	player.CharacterAdded:Connect(function(character)
+		respawning[player.UserId] = nil
+
+		local humanoid = character:WaitForChild("Humanoid", 10)
+		if not humanoid then return end
+
+		humanoid.Died:Connect(function()
+			if respawning[player.UserId] then return end
+			respawning[player.UserId] = true
+
+			PlayerDied:FireClient(player)
+
+			task.delay(Config.RESPAWN_DELAY, function()
+				if not player.Parent then return end
+
+				-- Destroy the dead character; Roblox won't auto-respawn
+				-- because CharacterAutoLoads = false, so we clone manually.
+				if character and character.Parent then
+					character:Destroy()
+				end
+
+				-- Wait a beat for cleanup, then spawn a fresh character
+				task.wait(0.3)
+				if not player.Parent then return end
+
+				player:LoadCharacter()
+				PlayerRespawn:FireClient(player)
+
+				-- Grant invincibility window
+				local spawnTime = tick()
+				player:SetAttribute("InvincibleUntil", spawnTime + Config.INVINCIBILITY_DURATION)
+			end)
+		end)
+	end)
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupDeathHandler(player)
+	player:LoadCharacter()
+end
+Players.PlayerAdded:Connect(function(player)
+	setupDeathHandler(player)
+	player:LoadCharacter()
+end)

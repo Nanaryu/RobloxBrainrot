@@ -30,6 +30,13 @@
       }
     },
 
+    "StarterGui": {
+      "$className": "StarterGui",
+      "LoadingGui": {
+        "$path": "src/StarterGui/LoadingGui"
+      }
+    },
+
     "Workspace": {
       "$className": "Workspace",
       "Map": {

@@ -40,6 +40,11 @@ Config.AUTO_ATTACK_INTERVAL= 1.0 -- seconds between player attacks
 Config.ENEMY_ATTACK_INTERVAL= 1.5
 Config.SOUND_HIT_ID        = ""  -- placeholder: set to rbxassetid://... for player hit SFX
 Config.SOUND_DAMAGE_ID     = ""  -- placeholder: set to rbxassetid://... for player takes damage SFX
+Config.SOUND_DEATH_ID      = ""  -- placeholder: set to rbxassetid://... for player death SFX
+
+-- ─── Death / Respawn ──────────────────────────────────────────────────────────
+Config.RESPAWN_DELAY          = 5    -- seconds between death and respawn
+Config.INVINCIBILITY_DURATION = 3    -- seconds of invincibility after respawn
 
 -- ─── Click Limit ──────────────────────────────────────────────────────────────
 Config.MAX_CLICK_DISTANCE  = 25  -- max Manhattan distance for click-to-move
