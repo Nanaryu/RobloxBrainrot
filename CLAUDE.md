@@ -39,7 +39,7 @@ BrainrotRPG/
     │       ├── SkillService.lua              ✅  Attack/Defense XP, level-up, SkillUpdated remote
     │       ├── EnemyService.lua              ✅  zone-based spawning, leash + return state, town boundary
     │       ├── KillTrackerService.lua        ✅  per-enemy + global kills, "KillTracker_v1" DataStore
-    │       ├── LootService.lua               ✅  drop rolls, world items, auto-pickup, inventory
+    │       ├── LootService.lua               ✅  drop rolls, world items, auto-pickup, inventory, equip/unequip
     │       ├── ZoneService.lua               ✅  zone lookup, safe-zone checks, random tile-in-zone
     │       └── CombatService.lua             ✅
     └── StarterPlayer/
@@ -204,13 +204,17 @@ StarterGui/
 - Elite star count bumps item rarity tier on drop
 
 ### ✅ Inventory UI (InventoryController.client.lua)
-- Listens to `InventoryUpdated` remote; calls `GetInventory` RemoteFunction on spawn
+- Listens to `InventoryUpdated` + `EquipmentUpdated` remotes; calls `GetInventory` + `GetEquipment` RemoteFunctions on spawn
 - Clears and rebuilds `ScrollingFrame` inside `InventoryPanel > InventoryContainer` on every update
 - Clones `InvSlot` template for each item; sets `ItemIcon` ImageLabel + `ItemLabel` TextLabel
-- `UIStroke` colored by rarity; item data stored as slot Attributes for equip system later
-- Sorted by rarity ascending then name; canvas height adjusted for UIGridLayout
+- `UIStroke` colored by rarity; green + thicker stroke for equipped items
+- Item data stored as Frame Attributes (`ItemId`, `ItemSlot`, `ItemEquipped`, `ItemRarity`, etc.) — click handler reads fresh attribute state at click time
+- Sorted by rarity ascending, then name, then **item ID** as stable tiebreaker (prevents visual reorder when two items share name+rarity)
+- Canvas height adjusted for UIGridLayout
 - Placeholder icon: `rbxassetid://101140058690765`
 - Template slot children expected: `ItemIcon` (ImageLabel), `ItemLabel` (TextLabel)
+- **Tooltip**: dedicated `TooltipGui` ScreenGui (DisplayOrder=99) so tooltip renders above inventory regardless of parent GUI's ZIndexBehavior; positioned to right of hovered slot, clamped to screen edges; fade-in/out tweens with `tooltipVisible` flag to prevent race condition
+- **Equip/Unequip**: click equipped item → `UnequipRequest:FireServer(slot)`; click unequipped item → `EquipRequest:FireServer(id)`. Brief white flash feedback on click; stroke restores from current attribute state (not stale closure capture)
 
 ### ✅ Floating Damage Numbers (DamageNumbers.client.lua)
 - `DamageNumber` remote → server-broadcast to all clients; white number for own hits, gray for others
@@ -255,12 +259,11 @@ StarterGui/
 | SkillUpdated | S→C | { Attack={…}, Defense={…} } |
 | ItemDropped | S→C | itemData, worldPosition |
 | InventoryUpdated | S→C | serialisedInventory |
-| RerollRequest | C→S | itemId×3 |
-| RerollResult | S→C | newItemData \| false |
-| OpenShopRequest | C→S | durationIndex |
-| BuyFromShop | C→S | shopOwnerId, listingId |
-| ShopListUpdated | S→C | shopData |
+| EquipRequest | C→S | itemId |
+| UnequipRequest | C→S | slot |
+| EquipmentUpdated | S→C | equipmentTable |
 | GetInventory | C→S fn | → inventory |
+| GetEquipment | C→S fn | → equipment table |
 | GetNearbyShops | C→S fn | → shop list |
 
 ---
@@ -333,7 +336,7 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [x] Combined enemy damage per tick (Rucoy-style — summed into one hit, DEF applied once)
 - [x] Enemy level display in overhead UI (computed from defense * 0.6)
 - [x] Proper XP-based level progression (Leaderboard stores totalXP, computes level)
-- [ ] Item equip system + player stat scaling
+- [x] Item equip system + player stat scaling
 - [ ] Item reroll UI
 - [ ] Full DataStore persistence (inventory, equipment)
 - [ ] NPC shop (premium currency)
@@ -370,6 +373,10 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - **Combined enemy damage**: `queueDamage(player, amount)` adds to `pendingDamage[userId]`. Processor runs every 0.5s (`DAMAGE_TICK`), sums all raw damage per player, applies DEF once via `max(1, totalRaw - defLevel)`, and grants DEF XP once. This makes group fights much more dangerous — 4 enemies each doing 10 damage = combined hit of 40 minus DEF, not 4 separate hits of 10 minus DEF each.
 - **Leaderboard.level → Leaderboard.totalXP**: `rawStats[userId]` now stores `totalXP` instead of `level`. On load, if old data contains `level` without `totalXP`, it migrates by deriving XP from the level table. `Leaderboard.AddXP(player, amount)` adds to `totalXP` and recomputes `Level.Value` via `Skills.LevelFromXP`. DataStore saves `{ totalXP, coins }`.
 - **Enemy level display**: `getEnemyLevel(enemyName)` computes `max(1, floor(defense * 0.6))`. Displayed in overhead BillboardGui as `[Lv.X] EnemyName`. Also stored as model attribute `Level` for client-side use.
+- **Inventory tooltip**: Uses a dedicated `TooltipGui` ScreenGui with `DisplayOrder = 99` (separate from `MainGui`) so the tooltip always renders above the inventory panel regardless of `ZIndexBehavior` mode (Sibling vs LayoutOrder). Position is calculated relative to `tooltipGui.AbsolutePosition`.
+- **Inventory sort stability**: `refreshInventory` sorts by rarity → name → **item ID**. Without the ID tiebreaker, two items with identical name+rarity would swap positions on every rebuild, making equipped item strokes visually jump between identical items.
+- **Equip click reads fresh attributes**: The click handler reads `ItemId`, `ItemEquipped`, `ItemSlot` from the slot Frame's Attributes (not closure-captured `item` table). Attributes are kept in sync by both `refreshInventory` (slot creation) and `refreshEquipment` (stroke updates), ensuring the correct action is taken even if UI is stale.
+- **refreshEquipment brief visual feedback**: `refreshEquipment` fires first (server sends it before `InventoryUpdated`) and updates strokes on existing slot Frames for immediate visual feedback. `refreshInventory` then destroys all slots and recreates from serialized data, providing the authoritative final state.
 
 ---
 
