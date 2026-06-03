@@ -1,13 +1,14 @@
--- ServerScriptService/Core/Leaderboard.server.lua
--- FIX: raw numbers are stored in DataStore; format() is called only at
--- display time. Previously formatted strings like "1.2K" were being saved,
--- which caused format() to error on reload and corrupt the values.
--- Uses a single DataStore key per player (table with level + coins).
+-- ServerScriptService/Core/Leaderboard.lua
+-- Proper XP-based level progression.
+-- Level.Value on leaderboard is the computed level (not raw XP).
+-- cumulative XP is stored server-side in rawStats and DataStore.
 
 local DataStoreService = game:GetService("DataStoreService")
 local Players          = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local data = DataStoreService:GetDataStore("Stats")
+local Skills = require(ReplicatedStorage.Modules.Skills)
+local data   = DataStoreService:GetDataStore("Stats")
 
 -- ─── Number formatter ─────────────────────────────────────────────────────────
 local SUFFIXES = {
@@ -48,12 +49,13 @@ local function format(number)
 	return string.format("%.1f%s", value, SUFFIXES[tier + 1][1])
 end
 
--- ─── Raw stat table per player: userId → { level, coins } ────────────────────
+-- ─── Raw stat table per player: userId → { totalXP, coins } ──────────────────
+-- totalXP = cumulative character XP (converted to level via Skills.LevelFromXP)
 local rawStats = {}
 
 local function getRaw(userId)
 	if not rawStats[userId] then
-		rawStats[userId] = { level = 1, coins = 0 }
+		rawStats[userId] = { totalXP = 0, coins = 0 }
 	end
 	return rawStats[userId]
 end
@@ -62,7 +64,8 @@ end
 local function refreshDisplay(player: Player)
 	local raw = rawStats[player.UserId]
 	if not raw or not player.leaderstats then return end
-	player.leaderstats.Level.Value = raw.level
+	local level = Skills.LevelFromXP(raw.totalXP)
+	player.leaderstats.Level.Value = level
 	player.leaderstats.Coins.Value = raw.coins
 end
 
@@ -78,9 +81,11 @@ function Leaderboard.AddCoins(player: Player, amount: number)
 	refreshDisplay(player)
 end
 
-function Leaderboard.SetLevel(player: Player, level: number)
+-- Add character XP and recompute display level.
+-- Called by EnemyService on enemy kill.
+function Leaderboard.AddXP(player: Player, amount: number)
 	local raw = getRaw(player.UserId)
-	raw.level = level
+	raw.totalXP += amount
 	refreshDisplay(player)
 end
 
@@ -115,8 +120,13 @@ Players.PlayerAdded:Connect(function(player)
 	end)
 
 	if ok and type(result) == "table" then
-		raw.level = tonumber(result.level) or 1
-		raw.coins = tonumber(result.coins) or 0
+		raw.totalXP = tonumber(result.totalXP) or 0
+		raw.coins   = tonumber(result.coins) or 0
+
+		-- Migration: old data stored level, not totalXP
+		if raw.totalXP == 0 and tonumber(result.level) and tonumber(result.level) > 1 then
+			raw.totalXP = Skills.XP_TABLE[tonumber(result.level)] or 0
+		end
 	else
 		-- Fall back to legacy separate keys
 		local ok2, result2 = pcall(function()
@@ -126,8 +136,9 @@ Players.PlayerAdded:Connect(function(player)
 			}
 		end)
 		if ok2 and type(result2) == "table" then
-			raw.level = tonumber(result2.level) or 1
-			raw.coins = tonumber(result2.coins) or 0
+			local legacyLevel = tonumber(result2.level) or 1
+			raw.totalXP = legacyLevel > 1 and (Skills.XP_TABLE[legacyLevel] or 0) or 0
+			raw.coins   = tonumber(result2.coins) or 0
 		end
 	end
 
@@ -138,7 +149,7 @@ end)
 local pendingSaves = {}
 
 local function scheduleSave(userId: number, raw: table)
-	pendingSaves[userId] = { level = raw.level, coins = raw.coins }
+	pendingSaves[userId] = { totalXP = raw.totalXP, coins = raw.coins }
 	task.delay(0.2, function()
 		if pendingSaves[userId] then
 			pcall(function()

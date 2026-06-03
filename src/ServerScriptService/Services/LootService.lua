@@ -135,7 +135,7 @@ local worldDrops = {}  -- itemId → { part, item, tileX, tileZ }
 
 local lootFolder: Folder
 
-local function spawnWorldDrop(item: table, worldPos: Vector3, tx: number, tz: number)
+local function spawnWorldDrop(item: table, worldPos: Vector3, tx: number, tz: number, killerId: number?)
 	local color = RARITY_COLOR[item.rarity] or Color3.new(1, 1, 1)
 
 	local part            = Instance.new("Part")
@@ -189,7 +189,7 @@ local function spawnWorldDrop(item: table, worldPos: Vector3, tx: number, tz: nu
 	nameLabel.Text                   = item.name
 	nameLabel.Parent                 = billboard
 
-	worldDrops[item.id] = { part = part, item = item, tileX = tx, tileZ = tz }
+	worldDrops[item.id] = { part = part, item = item, tileX = tx, tileZ = tz, killerId = killerId }
 end
 
 -- ─── Give item to player ──────────────────────────────────────────────────────
@@ -237,6 +237,9 @@ task.spawn(function()
 			if not drop then continue end
 
 			for _, player in ipairs(Players:GetPlayers()) do
+				-- Only the killer can pick up the drop
+				if drop.killerId and player.UserId ~= drop.killerId then continue end
+
 				local ptx, ptz = MovementService.GetPlayerTile(player)
 				if ptx then
 					local dist = math.abs(ptx - drop.tileX) + math.abs(ptz - drop.tileZ)
@@ -280,7 +283,7 @@ function LootService.Drop(model: Model, killer: Player?)
 		Config.TILE_HEIGHT + 0.5,
 		(tz - 0.5) * Config.TILE_SIZE
 	)
-	spawnWorldDrop(item, worldPos, tx, tz)
+	spawnWorldDrop(item, worldPos, tx, tz, killer and killer.UserId)
 	ItemDropped:FireAllClients(item, worldPos)
 end
 

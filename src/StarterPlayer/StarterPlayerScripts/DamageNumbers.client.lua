@@ -1,16 +1,16 @@
 -- StarterPlayer/StarterPlayerScripts/DamageNumbers.client.lua
 -- Spawns floating damage numbers above enemies and the local player.
 --
--- AttackResult  (hit, damage, enemyId, remainingHP)  → white/yellow number over enemy
--- TakeDamage    (targetUserId, amount)               → red number over our character
+-- DamageNumber (attackerUserId, damage, enemyId) → white/gray number over enemy (all players)
+-- TakeDamage   (targetUserId, amount)             → red number over our character
 
 local Players           = game:GetService("Players")
 local TweenService      = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Remotes       = ReplicatedStorage:WaitForChild("Remotes")
-local AttackResult  = Remotes:WaitForChild("AttackResult")
 local TakeDamage    = Remotes:WaitForChild("TakeDamage")
+local DamageNumber  = Remotes:WaitForChild("DamageNumber")
 
 local player = Players.LocalPlayer
 
@@ -23,6 +23,7 @@ local TEXT_SIZE    = 20     -- base pixel size
 
 -- Colours
 local COLOR_PLAYER_HIT = Color3.fromRGB(255, 255, 255)   -- white  — damage we deal
+local COLOR_OTHER_HIT  = Color3.fromRGB(180, 180, 180)   -- gray   — damage others deal
 local COLOR_SELF_HIT   = Color3.fromRGB(255, 60,  60)    -- red    — damage we take
 
 local TWEEN_INFO = TweenInfo.new(FLOAT_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -116,14 +117,8 @@ local function getSelfTopPos(): Vector3?
 end
 
 -- ─── Remotes ──────────────────────────────────────────────────────────────────
-AttackResult.OnClientEvent:Connect(function(hit: boolean, damage: number, enemyId: string)
-	if not hit or not damage or damage <= 0 then return end
-
-	local pos = getEnemyTopPos(enemyId)
-	if not pos then return end
-
-	spawnNumber(pos, tostring(damage), COLOR_PLAYER_HIT)
-end)
+-- AttackResult is handled by CombatController (hit sounds, target clearing).
+-- Damage numbers are now broadcast via DamageNumber remote (see below).
 
 TakeDamage.OnClientEvent:Connect(function(targetUserId: number, amount: number)
 	if targetUserId ~= player.UserId then return end
@@ -133,4 +128,15 @@ TakeDamage.OnClientEvent:Connect(function(targetUserId: number, amount: number)
 	if not pos then return end
 
 	spawnNumber(pos, "-" .. tostring(amount), COLOR_SELF_HIT)
+end)
+
+-- ─── Server-broadcast damage numbers (all players see all hits) ──────────────
+DamageNumber.OnClientEvent:Connect(function(attackerUserId: number, damage: number, enemyId: string)
+	if not damage or damage <= 0 then return end
+
+	local pos = getEnemyTopPos(enemyId)
+	if not pos then return end
+
+	local color = (attackerUserId == player.UserId) and COLOR_PLAYER_HIT or COLOR_OTHER_HIT
+	spawnNumber(pos, tostring(damage), color)
 end)

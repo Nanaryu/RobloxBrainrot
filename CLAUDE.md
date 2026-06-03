@@ -32,7 +32,7 @@ BrainrotRPG/
     │   ├── Core/
     │   │   ├── RemotesInit.server.lua        ✅  canonical remote creation
     │   │   ├── Main.server.lua               ✅  boots all services in dependency order
-    │   │   └── Leaderboard.server.lua        ✅  Level/Coins with DataStore; Kills owned by KillTrackerService
+    │   │   └── Leaderboard.lua               ✅  Level/Coins with DataStore; Kills owned by KillTrackerService
     │   └── Services/
     │       ├── TileGridService.lua           ✅  256×256 irregular map, zone-colored tiles, noise boundary
     │       ├── MovementService.lua           ✅
@@ -93,7 +93,7 @@ StarterGui/
 | MAP_NOISE_SEED | 42 | Change for different map shapes |
 | TOWN_RADIUS | 12 tiles | Hard safe boundary — enemies blocked |
 | MAX_CLICK_DISTANCE | 25 tiles | Client click-to-move range cap |
-| MOVE_TWEEN_TIME | 0.18 s | player & enemy slide speed |
+| MOVE_TWEEN_TIME | 0.35 s | player & enemy slide speed |
 | AUTO_ATTACK_RANGE | 1 tile | Manhattan == 1 |
 | AUTO_ATTACK_INTERVAL | 1.0 s | |
 | ENEMY_ATTACK_INTERVAL | 1.5 s | |
@@ -130,11 +130,13 @@ StarterGui/
 - WASD + click-to-move on `Tile_X_Z` parts
 - Client tweens server-approved path; destination highlight until arrival
 - Faces direction of travel; `CFrame.lookAt` tween
-- Server validates, broadcasts `PlayerMoved`; other clients lerp
-- Blocks non-walkable terrain, other players, enemy current/moving tiles
+- Server validates, broadcasts `PlayerMoved`; other clients tween along path
+- **Players can stack on the same tile** — pathfinding does NOT block on other players
+- Blocks non-walkable terrain and enemy current/moving tiles
 - Retargeting uses `requestId` to ignore stale approvals
 - Single Heartbeat constant-speed mover (no stacked tweens)
 - Blocked while Humanoid is dead; respawn-safe via `CharacterAdded`
+- **Other-player tween cancellation**: per-user `otherPlayerTokens` table prevents overlapping tween coroutines when chase re-paths fire rapidly
 - `MovementController.GetCurrentTile()`, `IsMoving()` exposed
 - `MovementService.GetPlayerTile(player)` exposed
 
@@ -149,16 +151,17 @@ StarterGui/
 
 ### ✅ Enemy System (EnemyService)
 - Models in `Workspace/Map/Enemies`; clones from `ServerStorage/EnemyModels/[name]`, fallback cube
-- **4-state AI**: `wander` → A* to random tile in `wanderRange`, 2–4 s pause; `chase` → re-paths toward nearest player; `attack` → faces player, damages every `ENEMY_ATTACK_INTERVAL`; `return` → walks back to spawn after leash break
+- **4-state AI**: `wander` → A* to random tile in `wanderRange`, 2–4 s pause; `chase` → re-paths toward nearest player; `attack` → faces player, calls `queueDamage` every `ENEMY_ATTACK_INTERVAL`; `return` → walks back to spawn after leash break
 - Occupied-tile set; `CurrentTileX/Z` + `MovingToTileX/Z` both player-blocking
 - **Leash system**: enemy drops aggro and enters `return` state when > `leashRange` tiles from spawn
 - **Town boundary**: enemies cannot path into Town zone tiles (`isPassableForEnemy` rejects safe-zone tiles)
 - **Elite system**: 5 % chance, 1–5 stars, HP/DMG multiplied per Config tables
-- **Overhead BillboardGui**: rarity-colored name (★ prefix) + green→red HP bar
+- **Overhead BillboardGui**: rarity-colored name with `[Lv.X]` prefix (computed as `max(1, floor(defense * 0.6))`) + green→red HP bar
 - **Zone-based spawning**: enemies fill non-safe zones based on `spawnDensity`; weighted random picks from `ZoneData.spawnEnemies`
 - **Respawn timer**: killed enemies queue respawn in their zone (8–15 s delay)
+- **Combined damage per tick** (Rucoy-style): `queueDamage` adds to per-player accumulator; processor runs every 0.5s summing all damage, applying DEF once, granting DEF XP once
 - `EnemyService.DamageEnemy(id, amount, player)`, `GetEnemy(id)`, `GetEnemyAtTile(tx, tz)`
-- `_Kill` calls `KillTrackerService.RegisterKill(killer, enemyName)` and `LootService.Drop(model, killer)`
+- `_Kill` calls `KillTrackerService.RegisterKill(killer, enemyName)`, `LootService.Drop(model, killer)`, and `LeaderboardService.AddXP(killer, xp)`
 
 ### ✅ Kill Tracker (KillTrackerService)
 - `KillTrackerService.RegisterKill(player, enemyName)` — called from `EnemyService._Kill`
@@ -166,19 +169,21 @@ StarterGui/
 - Persists to `"KillTracker_v1"` DataStore (saves on every kill + PlayerRemoving)
 - On load: uses `player:WaitForChild("leaderstats")` then sets `Kills.Value = _total` — wins race vs Leaderboard
 - `GetKills(player, enemyName)` and `GetTotalKills(player)` exposed
-- **Leaderboard.server.lua** does NOT touch `Kills` in `refreshDisplay` or `PlayerRemoving` — KillTracker owns it entirely
+- **Leaderboard.lua** does NOT touch `Kills` in `refreshDisplay` or `PlayerRemoving` — KillTracker owns it entirely
 
 ### ✅ Combat (CombatService + CombatController)
 - **Click-to-attack**: click enemy → `RequestAttack(enemyId)` → yellow SelectionBox → auto-attack loop
 - Escape key → `StopAttack` → deselect; target dies / out of range → deselect
 - Server: per-player auto-attack loop at `AUTO_ATTACK_INTERVAL`; single target only via `attackTarget[userId]`
+- **Dynamic chase system**: when target moves out of range during attack, server starts a chase loop that re-paths every 0.2s using time-based client position estimation (`estimatePlayerTile`) to keep paths accurate. Uses `requestId == -1` for attack-move paths.
 - **Damage formula** (IMPLEMENTED): `min_raw = (ATK_Level × BASE_ATK) / 20`, `max_raw = (ATK_Level × BASE_ATK) / 10`, accuracy check, roll `random(min_raw, max_raw) - enemy_DEF`
 - **Defense formula** (IMPLEMENTED): `max(1, enemy_damage - DEF_Level)` — flat subtraction, no cap
 - If accuracy = 0 (max_raw ≤ enemy_DEF): deal 0 — hard progression gate
 - No damage split — Rucoy-style 1v1 targeting
-- Grants ATK stat XP (1 tick per hit); DEF stat XP granted in EnemyService._DamagePlayer
+- Grants ATK stat XP (1 tick per hit); DEF stat XP granted in EnemyService `processDamageAccumulator` (1 tick per combined tick, not per enemy)
 - Equipment stat not yet factored in (pending inventory/equip system)
 - Dead players blocked from movement and combat (client + server)
+- **Forward declaration pattern**: `startChase` uses `local startChase` forward declaration to resolve circular runtime dependency with `doAttackTick`
 
 ### ✅ Skills (Skills.lua + SkillService.lua)
 - Constants: `Skills.ATTACK`, `Skills.DEFENSE`, `Skills.MAX_LEVEL = 99`
@@ -194,7 +199,7 @@ StarterGui/
 ### ✅ Loot System (ItemData.lua + LootService.lua)
 - 50+ item templates across 6 slots (weapon, offhand, helmet, chest, legs, boots), all 7 rarities
 - Drop chain: `EnemyService._Kill` → `LootService.Drop` → world neon sphere in `Workspace/Map/Loot` → 0.3s pickup loop → `InventoryUpdated` remote
-- Auto-pickup on exact tile (Manhattan == 0); first player wins
+- Auto-pickup on exact tile (Manhattan == 0); **killer-locked** — only the player who killed the enemy can pick up the drop
 - In-memory `inventories[userId]`; `GetInventory` RemoteFunction wired
 - Elite star count bumps item rarity tier on drop
 
@@ -208,7 +213,8 @@ StarterGui/
 - Template slot children expected: `ItemIcon` (ImageLabel), `ItemLabel` (TextLabel)
 
 ### ✅ Floating Damage Numbers (DamageNumbers.client.lua)
-- `AttackResult` → white number over enemy; `TakeDamage` → red number over own character
+- `DamageNumber` remote → server-broadcast to all clients; white number for own hits, gray for others
+- `TakeDamage` → red number over own character (damage taken)
 - Invisible anchor Part tweened upward 5 studs over 0.9s; label fades in second half
 
 ### ✅ HUD (HUDController.client.lua)
@@ -216,10 +222,12 @@ StarterGui/
 - Reactive: `Humanoid.HealthChanged` for HP; `SkillUpdated` remote for skill bars
 - Color-interpolated HP fill (green → red)
 
-### ✅ Leaderboard (Leaderboard.server.lua)
+### ✅ Leaderboard (Leaderboard.lua)
 - `leaderstats`: Level, Kills, Coins
 - Level + Coins persisted in `"Stats"` DataStore; Kills excluded (owned by KillTrackerService)
-- `refreshDisplay` does NOT write `Kills.Value` — KillTracker sets it directly after WaitForChild
+- **XP-based level progression**: `rawStats` stores `totalXP` (cumulative character XP). `Level.Value` is the **computed level** via `Skills.LevelFromXP(totalXP)`, NOT raw XP.
+- `refreshDisplay` computes level from `totalXP` and pushes to `Level.Value`
+- `Leaderboard.AddXP(player, amount)` — called by `EnemyService._Kill` to add kill XP
 - Large-number formatting with suffix table (K, M, B…)
 
 ### ✅ Left Panel UI (LocalScript in LeftPanel)
@@ -241,6 +249,7 @@ StarterGui/
 | AttackResult | S→C | hit, damage, enemyId, remainingHP |
 | StopAttack | C→S | — |
 | TakeDamage | S→C | targetUserId, amount |
+| DamageNumber | S→C all | attackerUserId, damage, enemyId |
 | EnemyDied | S→C all | enemyId, worldPosition |
 | EnemyHPUpdate | S→C all | enemyId, currentHP, maxHP |
 | SkillUpdated | S→C | { Attack={…}, Defense={…} } |
@@ -317,6 +326,13 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [x] Dual XP system (character level from kills + stat XP from using skills)
 - [x] Enemy speed nerf (reduced by 2-3 across all tiers)
 - [x] Enemy defense stat (all enemies now have defense values)
+- [x] Dynamic chase system (re-paths every 0.2s with client position estimation)
+- [x] Server-broadcast damage numbers (all players see all hits)
+- [x] Killer-locked loot drops
+- [x] Player stacking (pathfinding allows same-tile players)
+- [x] Combined enemy damage per tick (Rucoy-style — summed into one hit, DEF applied once)
+- [x] Enemy level display in overhead UI (computed from defense * 0.6)
+- [x] Proper XP-based level progression (Leaderboard stores totalXP, computes level)
 - [ ] Item equip system + player stat scaling
 - [ ] Item reroll UI
 - [ ] Full DataStore persistence (inventory, equipment)
@@ -337,18 +353,23 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 ---
 
 ## 🔑 Key Implementation Notes
-- **Kill tracking ownership**: KillTrackerService is sole owner of kill counts. Leaderboard.server.lua does NOT write `Kills.Value` in `refreshDisplay` or save it in `PlayerRemoving`. KillTracker sets `leaderstats.Kills.Value` via `WaitForChild` after load to win the race condition.
+- **Kill tracking ownership**: KillTrackerService is sole owner of kill counts. Leaderboard.lua does NOT write `Kills.Value` in `refreshDisplay` or save it in `PlayerRemoving`. KillTracker sets `leaderstats.Kills.Value` via `WaitForChild` after load to win the race condition.
 - **DataStores in use**: `"Stats"` (Level, Coins via Leaderboard), `"KillTracker_v1"` (kills via KillTrackerService), `"Skills_v1"` (Attack/Defense XP via SkillService), `"Inventory_v1"` (inventory via LootService) — all saved on PlayerRemoving + BindToClose only (batched, no per-kill writes)
 - Enemy defense reduction: flat subtraction — `max(1, enemy_damage - DEF_Level)`
 - Attack bonus: `GetAttackLevel(player)` → ATK stat level; baseATK = `Config.BASE_ATK` (10)
 - Damage: `(ATK_Level × BASE_ATK) / 20` to `/10`, accuracy check vs enemy defense, roll minus defense
-- Attack XP: 1 per enemy hit (CombatService); Defense XP: 1 per hit taken (EnemyService._DamagePlayer)
+- Attack XP: 1 per enemy hit (CombatService); Defense XP: 1 per combined tick taken (EnemyService `processDamageAccumulator`, not per enemy)
 - `SkillUpdated` fires after every XP grant + on CharacterAdded (0.5s delay) for HUD init
 - Loot drop chain: `EnemyService._Kill` → `KillTrackerService.RegisterKill` + `LootService.Drop` → world Part → pickup loop → `InventoryUpdated`
 - `ItemData._byRarity[rarityName]` pre-built array for fast random picks
 - Inventory slot template children must be named `ItemIcon` (ImageLabel) and `ItemLabel` (TextLabel)
 - Main.server.lua boot order: TileGrid → Movement → Skills → Enemy → KillTracker → Loot → Combat
 - **Unified movement sequence**: All movement (click-to-move via `playerMoveSeq`, walk-to-enemy via `CancelMovement`, death, StopAttack) uses ONE counter in MovementService. `walkToEnemy` calls `CancelMovement` which increments `playerMoveSeq`, invalidating both click-to-move and previous walk-to-enemy delayed tasks. This prevents `playerTiles` corruption from concurrent movement systems.
+- **Dynamic chase system**: `startChase` replaces static `walkToEnemy`. Uses time-based client position estimation (`estimatePlayerTile`) — tracks when the last path was sent and the player's speed, then calculates how many steps the client has completed via `floor(elapsed / speed)`. Range check and pathfinding both use the estimated position, not the stale server tile. Re-evaluates every 0.2s (`REVAL_INTERVAL`).
+- **Forward declaration pattern**: `startChase` uses `local startChase` forward declaration to resolve circular runtime dependency with `doAttackTick` (which calls `startChase` inside `task.defer`). In Lua, upvalues capture the variable, not the value — so the deferred callback sees the assigned function by call time.
+- **Combined enemy damage**: `queueDamage(player, amount)` adds to `pendingDamage[userId]`. Processor runs every 0.5s (`DAMAGE_TICK`), sums all raw damage per player, applies DEF once via `max(1, totalRaw - defLevel)`, and grants DEF XP once. This makes group fights much more dangerous — 4 enemies each doing 10 damage = combined hit of 40 minus DEF, not 4 separate hits of 10 minus DEF each.
+- **Leaderboard.level → Leaderboard.totalXP**: `rawStats[userId]` now stores `totalXP` instead of `level`. On load, if old data contains `level` without `totalXP`, it migrates by deriving XP from the level table. `Leaderboard.AddXP(player, amount)` adds to `totalXP` and recomputes `Level.Value` via `Skills.LevelFromXP`. DataStore saves `{ totalXP, coins }`.
+- **Enemy level display**: `getEnemyLevel(enemyName)` computes `max(1, floor(defense * 0.6))`. Displayed in overhead BillboardGui as `[Lv.X] EnemyName`. Also stored as model attribute `Level` for client-side use.
 
 ---
 
@@ -431,3 +452,6 @@ final_damage = max(1, enemy_damage - DEF_Level)
 - AoE power skill can be added later as separate feature
 - Damage split removed — Rucoy-style 1v1 targeting
 - Enemy speed reduced to compensate for removing split
+- All enemy damage per tick combined into one hit (not per-enemy calculation)
+- DEF XP granted once per combined tick, not per enemy attack — slower DEF progression
+- Leaderboard stores cumulative XP (`totalXP`), Level.Value is computed via `Skills.LevelFromXP`

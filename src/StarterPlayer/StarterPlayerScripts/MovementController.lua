@@ -76,6 +76,7 @@ local acceptedMoveRequestId = 0
 local requestedTileX        = nil
 local requestedTileZ        = nil
 local destinationHighlight  = nil
+local otherPlayerTokens     = {} -- [userId] → number; cancel old tween coroutines
 
 -- `spawned` tracks whether the server has confirmed our initial tile placement.
 -- It is only used inside PlayerMoved to distinguish a spawn snap from a path update.
@@ -310,11 +311,16 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
 		local otherHRP = other.Character:FindFirstChild("HumanoidRootPart")
 		if not otherHRP then return end
 
+		-- Cancel any in-progress tween for this player
+		otherPlayerTokens[userId] = (otherPlayerTokens[userId] or 0) + 1
+		local token = otherPlayerTokens[userId]
+
 		local prevX = otherHRP:GetAttribute("LastTileX")
 		local prevZ = otherHRP:GetAttribute("LastTileZ")
 		path = path or { {tx, tz} }
 		task.spawn(function()
 			for _, step in ipairs(path) do
+				if token ~= otherPlayerTokens[userId] then return end
 				local sx, sz = step[1], step[2]
 				local pos    = tileToWorld(sx, sz)
 				local cf

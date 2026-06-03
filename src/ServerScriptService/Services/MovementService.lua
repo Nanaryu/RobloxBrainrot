@@ -46,13 +46,11 @@ end
 
 local function findPlayerPath(player, fromX, fromZ, tx, tz)
 	if not isValidTile(fromX, fromZ) or not isValidTile(tx, tz) then return nil end
-	if isPlayerTileOccupied(tx, tz, player) then return nil end
 	if not EnemyService then EnemyService = require(script.Parent.EnemyService) end
 	if EnemyService.IsTileBlockedForPlayers and EnemyService.IsTileBlockedForPlayers(tx, tz) then return nil end
 
 	local function isPassable(px, pz)
 		if not TileGrid.IsWalkable(px, pz) then return false end
-		if isPlayerTileOccupied(px, pz, player) then return false end
 		if EnemyService.IsTileBlockedForPlayers and EnemyService.IsTileBlockedForPlayers(px, pz) then return false end
 		return true
 	end

@@ -16,6 +16,7 @@ local TileGrid    = require(script.Parent.TileGridService)
 local MovementService
 local SkillService
 local LootService
+local LeaderboardService
 
 local Remotes       = ReplicatedStorage:WaitForChild("Remotes")
 local EnemyDied     = Remotes:WaitForChild("EnemyDied")
@@ -28,6 +29,11 @@ local EnemyService = {}
 local enemies      = {}
 local enemyThreads = {}
 local enemyFolder
+
+-- Per-player damage accumulator (Rucoy-style combined damage)
+-- All enemy damage in the same tick window is summed, DEF applied once.
+local pendingDamage = {} -- [userId] = total raw damage accumulated this tick
+local DAMAGE_TICK   = 0.5 -- seconds between damage processing ticks
 
 -- occupiedTiles: key "tx_tz" → enemyId
 local occupiedTiles = {}
@@ -203,13 +209,21 @@ end
 RARITY_COLORS["Brainrot God"] = Color3.fromRGB(255, 50, 200)
 RARITY_COLORS["OG"]           = Color3.fromRGB(255, 100, 0)
 
+local function getEnemyLevel(enemyName: string): number
+	local data = EnemyData[enemyName]
+	if not data then return 1 end
+	return math.max(1, math.floor((data.defense or 0) * 0.6))
+end
+
 local function buildOverheadGui(model: Model, enemyName: string, rarity: string, stars: number)
 	local hrp = model.PrimaryPart
+	local enemyLevel = getEnemyLevel(enemyName)
+	model:SetAttribute("Level", enemyLevel)
 
 	local billboard         = Instance.new("BillboardGui")
 	billboard.Name          = "EnemyUI"
 	billboard.Adornee       = hrp
-	billboard.Size          = UDim2.new(0, 160, 0, 44)
+	billboard.Size          = UDim2.new(0, 180, 0, 44)
 	billboard.StudsOffset   = Vector3.new(0, 3.5, 0)
 	billboard.AlwaysOnTop   = false
 	billboard.ResetOnSpawn  = false
@@ -225,7 +239,7 @@ local function buildOverheadGui(model: Model, enemyName: string, rarity: string,
 	nameLabel.Font                   = Enum.Font.GothamBold
 	nameLabel.TextScaled             = true
 	local starStr = stars > 0 and (string.rep("★", stars) .. " ") or ""
-	nameLabel.Text   = starStr .. enemyName
+	nameLabel.Text   = starStr .. "[Lv." .. enemyLevel .. "] " .. enemyName
 	nameLabel.Parent = billboard
 
 	local barBG              = Instance.new("Frame")
@@ -404,6 +418,10 @@ local function pickWanderTarget(model: Model, id: string): (number, number)
 	return sx, sz
 end
 
+-- ─── Damage accumulator forward declaration ───────────────────────────────────
+-- Defined below _AILoop; forward-declared here so _AILoop's upvalue captures it.
+local queueDamage
+
 -- ─── AI Loop ──────────────────────────────────────────────────────────────────
 function EnemyService._AILoop(id: string)
 	task.wait(math.random() * 2)
@@ -535,7 +553,7 @@ function EnemyService._AILoop(id: string)
 					end
 
 					local dmg = m:GetAttribute("Damage")
-					EnemyService._DamagePlayer(targetPlayer, dmg, id)
+					queueDamage(targetPlayer, dmg)
 
 					task.wait(Config.ENEMY_ATTACK_INTERVAL)
 				end
@@ -567,24 +585,49 @@ function EnemyService._AILoop(id: string)
 	end
 end
 
--- ─── Damage player (Rucoy defense formula) ────────────────────────────────────
--- final_damage = max(1, enemy_damage - DEF_Level)
-function EnemyService._DamagePlayer(player: Player, amount: number, sourceId: string)
+-- ─── Damage accumulator (Rucoy-style combined damage) ─────────────────────────
+-- All enemy damage in the same tick window is combined into one hit,
+-- and DEF is applied once to the total. DEF XP granted once per tick.
+queueDamage = function(player: Player, amount: number)
+	if not player or not player.Parent then return end
 	local char = player.Character
 	if not char then return end
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then return end
 
-	if not SkillService then
-		SkillService = require(script.Parent.SkillService)
+	local userId = player.UserId
+	pendingDamage[userId] = (pendingDamage[userId] or 0) + amount
+end
+
+-- Process accumulated damage: sum per-player, apply DEF once, grant XP once
+local function processDamageAccumulator()
+	for userId, totalRaw in pairs(pendingDamage) do
+		pendingDamage[userId] = nil
+		if totalRaw > 0 then
+			local player = Players:GetPlayerByUserId(userId)
+			if player and player.Character then
+				local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					if not SkillService then
+						SkillService = require(script.Parent.SkillService)
+					end
+
+					local defLevel    = SkillService.GetDefenseLevel(player)
+					local finalDamage = math.max(1, totalRaw - defLevel)
+
+					humanoid:TakeDamage(finalDamage)
+					TakeDamage:FireClient(player, player.UserId, finalDamage)
+					SkillService.GrantDefenseXP(player, 1) -- 1 tick per combined tick
+				end
+			end
+		end
 	end
+end
 
-	local defLevel    = SkillService.GetDefenseLevel(player)
-	local finalDamage = math.max(1, amount - defLevel)
-
-	humanoid:TakeDamage(finalDamage)
-	TakeDamage:FireClient(player, player.UserId, finalDamage)
-	SkillService.GrantDefenseXP(player, 1) -- 1 tick per hit taken
+-- ─── Damage player (direct, kept for backward compat) ─────────────────────────
+-- final_damage = max(1, enemy_damage - DEF_Level)
+function EnemyService._DamagePlayer(player: Player, amount: number, sourceId: string)
+	queueDamage(player, amount)
 end
 
 -- ─── Receive damage from CombatService ────────────────────────────────────────
@@ -665,12 +708,12 @@ function EnemyService._Kill(id: string, killer: Player?)
 
 	-- Grant character level XP from enemy
 	if killer and killer.Parent then
-		local charData = killer:FindFirstChild("leaderstats")
-		if charData and charData:FindFirstChild("Level") then
-			local data = EnemyData[model:GetAttribute("EnemyName")]
-			if data then
-				charData.Level.Value = charData.Level.Value + data.xp
+		local data = EnemyData[model:GetAttribute("EnemyName")]
+		if data and data.xp then
+			if not LeaderboardService then
+				LeaderboardService = require(script.Parent.Parent.Core.Leaderboard)
 			end
+			LeaderboardService.AddXP(killer, data.xp)
 		end
 	end
 
@@ -805,6 +848,14 @@ do
 					end
 				end
 			end
+		end
+	end)
+
+	-- Start damage accumulator processor (Rucoy-style combined damage tick)
+	task.spawn(function()
+		while true do
+			task.wait(DAMAGE_TICK)
+			processDamageAccumulator()
 		end
 	end)
 

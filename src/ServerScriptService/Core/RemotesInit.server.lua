@@ -25,6 +25,9 @@ local EVENTS = {
 	"AttackResult",       -- Server → Client  (hit, damage, enemyId, remainingHP)
 	"StopAttack",         -- Client → Server  ()
 
+	-- Damage numbers (server-broadcast)
+	"DamageNumber",       -- Server → Client  (attackerUserId, damage, enemyId)
+
 	-- Skills
 	"SkillUpdated",       -- Server → Client  (payload table: { Attack={level,currentXP,neededXP}, Defense={...} })
 

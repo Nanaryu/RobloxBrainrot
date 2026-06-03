@@ -25,4 +25,7 @@ local LootService      = require(script.Parent.Parent.Services.LootService)
 -- 7. Combat depends on Enemy + Movement + Skills (attack XP + multipliers)
 local CombatService    = require(script.Parent.Parent.Services.CombatService)
 
+-- 8. Leaderboard (ModuleScript — must be required to register event handlers)
+local LeaderboardService = require(script.Parent.Leaderboard)
+
 print("[Main] All services loaded.")
