@@ -56,21 +56,26 @@ local pendingDamage = {}
 local DAMAGE_TICK   = 0.5
 
 local occupiedTiles = {}
+local TILE_KEY_MULT = 1000  -- safe for grids up to 1000×1000
+
+local function tileKey(tx, tz)
+	return tx * TILE_KEY_MULT + tz
+end
 
 local function occupyTile(tx, tz, id)
-	occupiedTiles[tx .. "_" .. tz] = id
+	occupiedTiles[tileKey(tx, tz)] = id
 end
 local function releaseTile(tx, tz, id)
-	local k = tx .. "_" .. tz
+	local k = tileKey(tx, tz)
 	if occupiedTiles[k] == id then
 		occupiedTiles[k] = nil
 	end
 end
 local function isTileOccupied(tx, tz)
-	return occupiedTiles[tx .. "_" .. tz] ~= nil
+	return occupiedTiles[tileKey(tx, tz)] ~= nil
 end
 local function isTileOccupiedByOther(tx, tz, id)
-	local occupant = occupiedTiles[tx .. "_" .. tz]
+	local occupant = occupiedTiles[tileKey(tx, tz)]
 	return occupant ~= nil and occupant ~= id
 end
 local function isModelBlockingTile(model: Model, tx: number, tz: number): boolean
@@ -97,7 +102,7 @@ local function isPassableForEnemy(tx, tz, id)
 	if isPlayerTileOccupied(tx, tz) then return false end
 	local zone = TileGrid.GetZone(tx, tz)
 	if zone == "Town" then return false end
-	local occupant = occupiedTiles[tx .. "_" .. tz]
+	local occupant = occupiedTiles[tileKey(tx, tz)]
 	return occupant == nil or occupant == id
 end
 
@@ -450,7 +455,7 @@ function EnemyService._AILoop(id: string)
 
 	local WANDER_PAUSE_MIN = 2.0
 	local WANDER_PAUSE_MAX = 4.0
-	local CHASE_TICK       = 0.05
+	local CHASE_TICK       = 0.2
 
 	while true do
 		local model = enemies[id]
@@ -541,15 +546,22 @@ function EnemyService._AILoop(id: string)
 						return isPassableForEnemy(tx, tz, id)
 					end
 
+					-- Sort goals by manhattan distance to enemy (closest first),
+					-- stop at the first valid path — avoids running 4 pathfinds.
 					local goals = { {ptx2+1,ptz2}, {ptx2-1,ptz2}, {ptx2,ptz2+1}, {ptx2,ptz2-1} }
+					table.sort(goals, function(a, b)
+						return manhattan(cx2, cz2, a[1], a[2]) < manhattan(cx2, cz2, b[1], b[2])
+					end)
+
 					local bestPath = nil
 					for _, goal in ipairs(goals) do
 						local gx, gz = goal[1], goal[2]
 						if gx == cx2 and gz == cz2 then bestPath = {} break end
 						if isPassableC(gx, gz) then
-							local candidate = Pathfinder.FindPath(isPassableC, cx2, cz2, gx, gz, 300)
-							if candidate and (not bestPath or #candidate < #bestPath) then
+							local candidate = Pathfinder.FindPath(isPassableC, cx2, cz2, gx, gz, 150)
+							if candidate then
 								bestPath = candidate
+								break  -- closest valid goal found, stop
 							end
 						end
 					end
@@ -725,13 +737,15 @@ local function queueRespawn(zoneId: string)
 		if tx and tz and not isTileOccupied(tx, tz) and not isPlayerTileOccupied(tx, tz) then
 			local spawnPool = ZoneData.BuildSpawnPool(zone)
 			local entry = ZoneData.PickEnemy(zone, spawnPool)
-			EnemyService.Spawn({
-				name        = entry.name,
-				tx          = tx,
-				tz          = tz,
-				wanderRange = entry.wanderRange,
-				aggroRange  = entry.aggroRange,
-			})
+			if entry then
+				EnemyService.Spawn({
+					name        = entry.name,
+					tx          = tx,
+					tz          = tz,
+					wanderRange = entry.wanderRange,
+					aggroRange  = entry.aggroRange,
+				})
+			end
 		end
 	end)
 end
@@ -845,7 +859,7 @@ do
 		local spawnZ = Config.GRID_HEIGHT / 2
 
 		for _, zone in ipairs(ZoneData.ZONES) do
-			if not zone.safe and #zone.spawnEnemies > 0 then
+			if ZoneData.HasSpawns(zone) then
 				local spawnPool = ZoneData.BuildSpawnPool(zone)
 				local walkableCount = 0
 				local zoneCx = spawnX + zone.center.x
@@ -901,16 +915,18 @@ do
 
 					if tx and tz then
 						local entry = ZoneData.PickEnemy(zone, spawnPool)
-						local result = EnemyService.Spawn({
-							name        = entry.name,
-							tx          = tx,
-							tz          = tz,
-							wanderRange = entry.wanderRange,
-							aggroRange  = entry.aggroRange,
-							leashRange  = zone.leashRange or 15,
-						})
-						if result then
-							spawned += 1
+						if entry then
+							local result = EnemyService.Spawn({
+								name        = entry.name,
+								tx          = tx,
+								tz          = tz,
+								wanderRange = entry.wanderRange,
+								aggroRange  = entry.aggroRange,
+								leashRange  = zone.leashRange or 15,
+							})
+							if result then
+								spawned += 1
+							end
 						end
 					end
 				end

@@ -14,7 +14,7 @@ local RETRY_DELAY  = 1.5
 
 -- ─── Build loading UI ─────────────────────────────────────────────────────────
 local gui                 = Instance.new("ScreenGui")
-gui.Name                  = "LoadingGui"
+gui.Name                  = "LoadingOverlay"
 gui.ResetOnSpawn          = false
 gui.IgnoreGuiInset        = true
 gui.DisplayOrder          = 200

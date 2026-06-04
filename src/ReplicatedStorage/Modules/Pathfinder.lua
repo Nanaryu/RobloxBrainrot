@@ -1,16 +1,9 @@
 -- ReplicatedStorage/Modules/Pathfinder.lua
--- Tile-based A* pathfinding.
+-- Tile-based A* pathfinding with binary min-heap open set.
 -- Usage:
 --   local Pathfinder = require(...)
 --   local path = Pathfinder.FindPath(isWalkableFn, startX, startZ, goalX, goalZ, maxNodes)
 --   -- returns array of {tx, tz} steps from start→goal (exclusive of start), or nil if unreachable
---
--- FIXES:
---   • Added proper closed set — nodes are never re-expanded, preventing wasted capacity
---     and potential incorrect paths from stale g-scores being re-opened.
---   • key() uses string concatenation instead of arithmetic to guarantee zero collisions
---     regardless of grid dimensions.
---   • orderedNeighbours tie-breaking cleaned up and made deterministic.
 
 local Pathfinder = {}
 
@@ -18,45 +11,94 @@ local function heuristic(ax, az, bx, bz)
 	return math.abs(ax - bx) + math.abs(az - bz)
 end
 
--- String key — zero collision risk at any grid size.
-local function key(x, z)
-	return x .. "_" .. z
+-- Numeric key: safe for grids up to 2000×2000. No string allocation.
+local GRID_W = 2000
+local function nkey(x, z)
+	return x * GRID_W + z
 end
 
-local BASE_NEIGHBOURS = { {1,0}, {-1,0}, {0,1}, {0,-1} }
+local NEIGHBOURS = { {1,0}, {-1,0}, {0,1}, {0,-1} }
 
-local function orderedNeighbours(cx, cz, goalX, goalZ)
-	local neighbours = {}
-	for _, off in ipairs(BASE_NEIGHBOURS) do
-		local nx, nz = cx + off[1], cz + off[2]
-		local h = heuristic(nx, nz, goalX, goalZ)
-		-- towardGoal: positive when this step moves closer on each axis
-		local towardGoal = 0
-		if off[1] ~= 0 then
-			if (off[1] > 0) == (goalX > cx) then
-				towardGoal = towardGoal + math.abs(goalX - cx)
-			end
+-- ─── Binary min-heap (f-score, then h as tiebreaker) ─────────────────────────
+-- Stores { x, z, f, h } nodes. Heap[1] is always the lowest f.
+local function heapInsert(heap, node)
+	local i = #heap + 1
+	heap[i] = node
+	-- bubble up
+	while i > 1 do
+		local p = math.floor(i / 2)
+		local a, b = heap[i], heap[p]
+		if a.f < b.f or (a.f == b.f and a.h < b.h) then
+			heap[i], heap[p] = heap[p], heap[i]
+			i = p
+		else
+			break
 		end
-		if off[2] ~= 0 then
-			if (off[2] > 0) == (goalZ > cz) then
-				towardGoal = towardGoal + math.abs(goalZ - cz)
-			end
-		end
-		table.insert(neighbours, {
-			dx = off[1], dz = off[2],
-			h = h,
-			towardGoal = towardGoal,
-		})
 	end
+end
 
-	table.sort(neighbours, function(a, b)
-		if a.h ~= b.h then return a.h < b.h end
-		if a.towardGoal ~= b.towardGoal then return a.towardGoal > b.towardGoal end
-		if a.dz ~= b.dz then return a.dz < b.dz end
-		return a.dx < b.dx
-	end)
+local function heapPop(heap)
+	local top = heap[1]
+	local last = #heap
+	heap[1] = heap[last]
+	heap[last] = nil
+	-- sink down
+	local i = 1
+	local n = #heap
+	while true do
+		local l, r = i * 2, i * 2 + 1
+		local smallest = i
+		if l <= n then
+			local a, b = heap[l], heap[smallest]
+			if a.f < b.f or (a.f == b.f and a.h < b.h) then
+				smallest = l
+			end
+		end
+		if r <= n then
+			local a, b = heap[r], heap[smallest]
+			if a.f < b.f or (a.f == b.f and a.h < b.h) then
+				smallest = r
+			end
+		end
+		if smallest ~= i then
+			heap[i], heap[smallest] = heap[smallest], heap[i]
+			i = smallest
+		else
+			break
+		end
+	end
+	return top
+end
 
-	return neighbours
+-- Pre-allocated neighbour buffer to avoid per-call table creation.
+-- Each entry: { nx, nz, h, towardGoal } — reused across calls.
+local nbBuf = {
+	{ nx=0, nz=0, h=0, towardGoal=0 },
+	{ nx=0, nz=0, h=0, towardGoal=0 },
+	{ nx=0, nz=0, h=0, towardGoal=0 },
+	{ nx=0, nz=0, h=0, towardGoal=0 },
+}
+
+local function getNeighbours(cx, cz, goalX, goalZ)
+	local count = 0
+	for _, off in ipairs(NEIGHBOURS) do
+		local nx, nz = cx + off[1], cz + off[2]
+		count += 1
+		local nb = nbBuf[count]
+		nb.nx = nx
+		nb.nz = nz
+		nb.h = heuristic(nx, nz, goalX, goalZ)
+		-- towardGoal: positive when this step moves closer on each axis
+		local tg = 0
+		if off[1] ~= 0 and (off[1] > 0) == (goalX > cx) then
+			tg += math.abs(goalX - cx)
+		end
+		if off[2] ~= 0 and (off[2] > 0) == (goalZ > cz) then
+			tg += math.abs(goalZ - cz)
+		end
+		nb.towardGoal = tg
+	end
+	return nbBuf, count
 end
 
 function Pathfinder.FindPath(
@@ -66,51 +108,41 @@ function Pathfinder.FindPath(
 	maxNodes: number?
 ): { {number} }
 
-	maxNodes = maxNodes or 800
+	maxNodes = maxNodes or 1200
 
 	if startX == goalX and startZ == goalZ then return {} end
 
-	local openSet  = {}
-	local cameFrom = {}   -- key → { px, pz }
-	local gScore   = {}
-	local inOpen   = {}
-	local closed   = {}   -- FIX: closed set prevents re-expansion of settled nodes
+	local openSet  = {}   -- binary min-heap
+	local cameFrom = {}   -- nkey → { px, pz }
+	local gScore   = {}   -- nkey → number
+	local inOpen   = {}   -- nkey → true
+	local closed   = {}   -- nkey → true
 
-	local startKey = key(startX, startZ)
-	gScore[startKey] = 0
+	local sk = nkey(startX, startZ)
+	gScore[sk] = 0
 
-	table.insert(openSet, {
+	heapInsert(openSet, {
 		x = startX, z = startZ,
 		f = heuristic(startX, startZ, goalX, goalZ),
 		h = heuristic(startX, startZ, goalX, goalZ),
 	})
-	inOpen[startKey] = true
+	inOpen[sk] = true
 
-	local expanded = 0  -- FIX: count unique expansions, not total pops
+	local expanded = 0
 
 	while #openSet > 0 do
-		-- Pop node with lowest f (linear scan — acceptable for ≤800-node cap)
-		local bestIdx = 1
-		for i = 2, #openSet do
-			if openSet[i].f < openSet[bestIdx].f
-				or (openSet[i].f == openSet[bestIdx].f
-					and openSet[i].h < openSet[bestIdx].h) then
-				bestIdx = i
-			end
-		end
-
-		local current = table.remove(openSet, bestIdx)
+		local current = heapPop(openSet)
 		local cx, cz  = current.x, current.z
-		local ck      = key(cx, cz)
+		local ck      = nkey(cx, cz)
 		inOpen[ck]    = nil
 
-		-- FIX: skip if already expanded (a better path was found and this is stale)
+		-- Skip if already expanded (stale entry in heap)
 		if closed[ck] then continue end
 		closed[ck] = true
 		expanded  += 1
 
 		if cx == goalX and cz == goalZ then
-			-- Single-pass path reconstruction
+			-- Path reconstruction
 			local path    = {}
 			local nodeX   = cx
 			local nodeZ   = cz
@@ -120,7 +152,7 @@ function Pathfinder.FindPath(
 				local parent = cameFrom[nodeKey]
 				nodeX   = parent.px
 				nodeZ   = parent.pz
-				nodeKey = key(nodeX, nodeZ)
+				nodeKey = nkey(nodeX, nodeZ)
 				if nodeX == startX and nodeZ == startZ then break end
 				table.insert(path, { nodeX, nodeZ })
 			end
@@ -137,24 +169,23 @@ function Pathfinder.FindPath(
 			return nil
 		end
 
-		for _, off in ipairs(orderedNeighbours(cx, cz, goalX, goalZ)) do
-			local nx, nz = cx + off.dx, cz + off.dz
-			local nk     = key(nx, nz)
+		-- Expand neighbours (reuses pre-allocated buffer)
+		local nbs, nCount = getNeighbours(cx, cz, goalX, goalZ)
+		for i = 1, nCount do
+			local nb = nbs[i]
+			local nx, nz = nb.nx, nb.nz
+			local nk = nkey(nx, nz)
 
-			-- FIX: skip closed neighbours — their optimal path is already known
-			if closed[nk] then continue end
-
-			if isWalkable(nx, nz) then
+			if not closed[nk] and isWalkable(nx, nz) then
 				local tentG = (gScore[ck] or math.huge) + 1
 				if tentG < (gScore[nk] or math.huge) then
 					cameFrom[nk] = { px = cx, pz = cz }
 					gScore[nk]   = tentG
 					if not inOpen[nk] then
-						local h = heuristic(nx, nz, goalX, goalZ)
-						table.insert(openSet, {
+						heapInsert(openSet, {
 							x = nx, z = nz,
-							f = tentG + h,
-							h = h,
+							f = tentG + nb.h,
+							h = nb.h,
 						})
 						inOpen[nk] = true
 					end

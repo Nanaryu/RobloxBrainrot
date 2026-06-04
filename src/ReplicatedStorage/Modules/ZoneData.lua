@@ -3,8 +3,10 @@
 -- centre offset (from grid centre) + base radius + noise amplitude.
 -- TileGridService uses Voronoi + noise to assign to assign tiles to zones.
 -- Zones are compact: 10-12 tile radii, centers 12-13 tiles from spawn.
+-- Spawn enemies are pulled dynamically from EnemyData.spawnZones.
 
 local ZoneData = {}
+local EnemyData = require(script.Parent.EnemyData)
 
 -- Zone order matters for spawn pool only; assignment is geometry-based.
 ZoneData.ZONES = {
@@ -21,7 +23,6 @@ ZoneData.ZONES = {
 			secondary = Color3.fromRGB(160, 145, 90),
 		},
 		tileMaterial = Enum.Material.SmoothPlastic,
-		spawnEnemies = {},
 		leashRange  = 0,
 		spawnDensity = 0,
 	},
@@ -38,16 +39,6 @@ ZoneData.ZONES = {
 			secondary = Color3.fromRGB(70, 110, 55),
 		},
 		tileMaterial = Enum.Material.Grass,
-		spawnEnemies = {
-			{ name = "Noobini Pizzanini",    weight = 30, wanderRange = 4, aggroRange = 5 },
-			{ name = "Lirili Larila",        weight = 25, wanderRange = 4, aggroRange = 5 },
-			{ name = "TIM Cheese",           weight = 18, wanderRange = 3, aggroRange = 5 },
-			{ name = "FluriFlura",           weight = 12, wanderRange = 3, aggroRange = 5 },
-			{ name = "Talpa Di Fero",        weight = 8,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Svinina Bombardino",   weight = 4,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Pipi Kiwi",            weight = 2,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Graipuss Medussi",    weight = 1,  wanderRange = 3, aggroRange = 5 },
-		},
 		spawnDensity = 0.012,
 		leashRange   = 6,
 	},
@@ -64,18 +55,6 @@ ZoneData.ZONES = {
 			secondary = Color3.fromRGB(180, 158, 100),
 		},
 		tileMaterial = Enum.Material.Sand,
-		spawnEnemies = {
-			{ name = "Pipi Corni",            weight = 20, wanderRange = 3, aggroRange = 5 },
-			{ name = "Trippi Troppi",         weight = 20, wanderRange = 3, aggroRange = 5 },
-			{ name = "Gangster Footera",      weight = 16, wanderRange = 3, aggroRange = 5 },
-			{ name = "Bandito Bobritto",      weight = 14, wanderRange = 3, aggroRange = 5 },
-			{ name = "Boneca Ambalabu",       weight = 12, wanderRange = 3, aggroRange = 5 },
-			{ name = "Cacto Hipopotamo",      weight = 8,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Ta Ta Ta Ta Sahur",     weight = 5,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Tric Trac Baraboom",    weight = 3,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Pipi Avocado",          weight = 1.5,wanderRange = 3, aggroRange = 5 },
-			{ name = "Bulbito Bandito Traktorito",            weight = 0.5,wanderRange = 3, aggroRange = 5 },
-		},
 		spawnDensity = 0.012,
 		leashRange   = 6,
 	},
@@ -92,20 +71,6 @@ ZoneData.ZONES = {
 			secondary = Color3.fromRGB(45, 70, 42),
 		},
 		tileMaterial = Enum.Material.Mud,
-		spawnEnemies = {
-			{ name = "Cappuccino Assassino",  weight = 18, wanderRange = 3, aggroRange = 5 },
-			{ name = "Brr Brr Patapim",       weight = 16, wanderRange = 3, aggroRange = 5 },
-			{ name = "Trulimero Trulicina",   weight = 14, wanderRange = 3, aggroRange = 5 },
-			{ name = "Bambini Crostini",       weight = 12, wanderRange = 3, aggroRange = 5 },
-			{ name = "Bananita Dolphinita",   weight = 10, wanderRange = 3, aggroRange = 5 },
-			{ name = "Perochello Lemonchello",weight = 8,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Brri Brri Bicus Dicus Bombicus", weight = 6, wanderRange = 3, aggroRange = 5 },
-			{ name = "Avocadini Guffo",       weight = 5,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Salamino Penguino",     weight = 4,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Antonio",          weight = 3,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Penguino Cocosino",     weight = 2,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Ti Ti Ti Sahur",        weight = 2,  wanderRange = 3, aggroRange = 5 },
-		},
 		spawnDensity = 0.012,
 		leashRange   = 6,
 	},
@@ -122,24 +87,6 @@ ZoneData.ZONES = {
 			secondary = Color3.fromRGB(60, 35, 28),
 		},
 		tileMaterial = Enum.Material.Slate,
-		spawnEnemies = {
-			{ name = "Burbaloni Loliloli",    weight = 14, wanderRange = 3, aggroRange = 5 },
-			{ name = "Chimpanzini Bananini",   weight = 12, wanderRange = 3, aggroRange = 5 },
-			{ name = "Ballerina Cappuccina",  weight = 10, wanderRange = 3, aggroRange = 5 },
-			{ name = "Chef Crabracadabra",    weight = 8,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Lionel Cactuseli",      weight = 7,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Glorbo Fruttodrillo",   weight = 6,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Blueberrinni Octopusini",weight = 5,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Strawberrelli Flamingelli", weight = 4, wanderRange = 2, aggroRange = 5 },
-			{ name = "Pandaccini Bananini",   weight = 3,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Sigma Boy",             weight = 2,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Sigma Girl",            weight = 2,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Pakrahmatmamat",      weight = 2,  wanderRange = 3, aggroRange = 5 },
-			{ name = "Job Job Job Sahur",          weight = 1.5,wanderRange = 2, aggroRange = 5 },
-			{ name = "Avocadini Antilopini",          weight = 1,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Crabbo Limonetta",         weight = 1,  wanderRange = 2, aggroRange = 5 },
-			{ name = "Spioniro Golubiro",     weight = 0.5,wanderRange = 3, aggroRange = 5 },
-		},
 		spawnDensity = 0.012,
 		leashRange   = 6,
 	},
@@ -155,19 +102,44 @@ function ZoneData.GetZone(id: string)
 	return ZoneData._byId[id]
 end
 
+-- Returns true if the zone has at least one enemy defined in EnemyData
+function ZoneData.HasSpawns(zone)
+	if zone.safe then return false end
+	for _, data in pairs(EnemyData) do
+		if data.spawnZones and data.spawnZones[zone.id] then
+			return true
+		end
+	end
+	return false
+end
+
 -- Build a weighted spawn list for fast random picks
+-- Dynamically queries EnemyData for enemies that list this zone in spawnZones
 function ZoneData.BuildSpawnPool(zone)
 	local pool = {}
 	local totalWeight = 0
-	for _, entry in ipairs(zone.spawnEnemies) do
-		totalWeight += entry.weight
-		table.insert(pool, { entry = entry, cumWeight = totalWeight })
+	for name, data in pairs(EnemyData) do
+		if data.spawnZones then
+			local weight = data.spawnZones[zone.id]
+			if weight and weight > 0 then
+				totalWeight += weight
+				table.insert(pool, {
+					entry = {
+						name        = name,
+						wanderRange = data.wanderRange or 3,
+						aggroRange  = data.aggroRange or 5,
+					},
+					cumWeight = totalWeight,
+				})
+			end
+		end
 	end
 	return { pool = pool, totalWeight = totalWeight }
 end
 
 -- Pick a random enemy from a zone's spawn pool
 function ZoneData.PickEnemy(zone, spawnPool)
+	if spawnPool.totalWeight <= 0 then return nil end
 	local roll = math.random() * spawnPool.totalWeight
 	for _, item in ipairs(spawnPool.pool) do
 		if roll <= item.cumWeight then

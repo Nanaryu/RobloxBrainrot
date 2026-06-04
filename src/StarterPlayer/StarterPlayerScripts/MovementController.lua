@@ -369,11 +369,14 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId, enem
 		clearHighlight()
 		if hrp then hrp.CFrame = CFrame.new(tileToWorld(tx, tz)) end
 
-		if pendingTileX and pendingTileZ then
+		if pendingTileX and pendingTileZ and not player.PlayerGui:FindFirstChild("LoadingOverlay") then
 			local ptx, ptz = pendingTileX, pendingTileZ
 			pendingTileX   = nil
 			pendingTileZ   = nil
 			task.defer(function() requestMove(ptx, ptz) end)
+		else
+			pendingTileX = nil
+			pendingTileZ = nil
 		end
 		return
 	end
@@ -458,6 +461,7 @@ local mouse = player:GetMouse()
 mouse.Button1Down:Connect(function()
 	if not isAlive() then return end
 	if isTargetingActive() then return end
+	if player.PlayerGui:FindFirstChild("LoadingOverlay") then return end
 
 	local target = mouse.Target
 	if not target then return end

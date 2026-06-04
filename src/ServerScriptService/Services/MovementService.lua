@@ -32,7 +32,7 @@ local playerMoveSeq  = {}
 local playerDest     = {} -- [userId] = { tx, tz }  — final destination (for display only)
 local EnemyService
 
-local MAX_PATH_NODES = 400
+local MAX_PATH_NODES = 800
 
 local function isPlayerTileOccupied(tx, tz, exceptPlayer)
 	for userId, tile in pairs(playerTiles) do
@@ -72,6 +72,13 @@ local function findPlayerPath(player, fromX, fromZ, tx, tz)
 	if not isPassable(tx, tz) then return nil end
 	local path = Pathfinder.FindPath(isPassable, fromX, fromZ, tx, tz, MAX_PATH_NODES)
 	if path and #path > MAX_PATH_NODES then return nil end
+	if not path then
+		local userId = player.UserId
+		local cur = playerTiles[userId]
+		if cur and (cur.tx ~= fromX or cur.tz ~= fromZ) then
+			path = Pathfinder.FindPath(isPassable, cur.tx, cur.tz, tx, tz, MAX_PATH_NODES)
+		end
+	end
 	return path
 end
 
