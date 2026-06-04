@@ -14,7 +14,7 @@ EnemyData["FluriFlura"]          = { tier=1, hp=65,   dmg=7,  defense=3,  speed=
 EnemyData["Talpa Di Fero"]       = { tier=1, hp=80,   dmg=8,  defense=4,  speed=7,  xp=6,   gold={5,9},   lootRarity="Common"   }
 EnemyData["Svinina Bombardino"]  = { tier=1, hp=90,   dmg=9,  defense=4,  speed=7,  xp=7,   gold={6,10},  lootRarity="Common"   }
 EnemyData["Pipi Kiwi"]           = { tier=1, hp=100,  dmg=10, defense=5,  speed=7,  xp=8,   gold={7,12},  lootRarity="Common"   }
-EnemyData["Racooni Jandelini"]   = { tier=1, hp=95,   dmg=10, defense=5,  speed=7,  xp=8,   gold={7,11},  lootRarity="Common"   }
+EnemyData["Graipuss Medussi"]    = { tier=1, hp=95,   dmg=10, defense=5,  speed=7,  xp=8,   gold={7,11},  lootRarity="Common"   }
 EnemyData["Pipi Corni"]          = { tier=1, hp=110,  dmg=12, defense=6,  speed=7,  xp=9,   gold={8,13},  lootRarity="Common"   }
 
 -- ─── Rare (tier 2) ───────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ EnemyData["Cacto Hipopotamo"]    = { tier=2, hp=280,  dmg=25, defense=14, speed=
 EnemyData["Ta Ta Ta Ta Sahur"]   = { tier=2, hp=300,  dmg=27, defense=15, speed=8,  xp=36,  gold={27,44}, lootRarity="Rare"     }
 EnemyData["Tric Trac Baraboom"]  = { tier=2, hp=340,  dmg=30, defense=16, speed=8,  xp=42,  gold={30,50}, lootRarity="Rare"     }
 EnemyData["Pipi Avocado"]        = { tier=2, hp=360,  dmg=32, defense=17, speed=8,  xp=45,  gold={32,52}, lootRarity="Rare"     }
-EnemyData["Frogo Elfo"]          = { tier=2, hp=350,  dmg=31, defense=18, speed=8,  xp=44,  gold={31,51}, lootRarity="Rare"     }
+EnemyData["Bulbito Bandito Traktorito"]     = { tier=2, hp=350,  dmg=31, defense=18, speed=8,  xp=44,  gold={31,51}, lootRarity="Rare"     }
 
 -- ─── Epic (tier 3) ───────────────────────────────────────────────────────────
 EnemyData["Cappuccino Assassino"]            = { tier=3, hp=500,  dmg=45,  defense=25, speed=9,  xp=70,  gold={50,80},   lootRarity="Epic" }
@@ -52,12 +52,12 @@ EnemyData["Glorbo Fruttodrillo"]   = { tier=4, hp=8500,  dmg=470, defense=120, s
 EnemyData["Blueberrinni Octopusini"]= { tier=4, hp=10000, dmg=550, defense=125, speed=11, xp=1400, gold={1000,1550},lootRarity="Legendary" }
 EnemyData["Strawberrelli Flamingelli"]={ tier=4,hp=11000, dmg=600, defense=130, speed=12, xp=1540, gold={1100,1700},lootRarity="Legendary" }
 EnemyData["Pandaccini Bananini"]   = { tier=4, hp=12000, dmg=650, defense=135, speed=12, xp=1680, gold={1200,1850},lootRarity="Legendary" }
-EnemyData["Cocosini Mama"]         = { tier=4, hp=11500, dmg=625, defense=132, speed=12, xp=1610, gold={1150,1775},lootRarity="Legendary" }
+EnemyData["Crabbo Limonetta"]         = { tier=4, hp=11500, dmg=625, defense=132, speed=12, xp=1610, gold={1150,1775},lootRarity="Legendary" }
 EnemyData["Sigma Boy"]             = { tier=4, hp=13000, dmg=700, defense=140, speed=12, xp=1820, gold={1300,2000},lootRarity="Legendary" }
 EnemyData["Sigma Girl"]            = { tier=4, hp=14000, dmg=750, defense=150, speed=12, xp=1960, gold={1400,2150},lootRarity="Legendary" }
-EnemyData["Pi Pi Watermelon"]      = { tier=4, hp=9000,  dmg=500, defense=110, speed=11, xp=1260, gold={900,1400}, lootRarity="Legendary" }
-EnemyData["Chocco Bunny"]          = { tier=4, hp=13500, dmg=720, defense=145, speed=12, xp=1890, gold={1350,2075},lootRarity="Legendary" }
-EnemyData["Sealo Regalo"]          = { tier=4, hp=14500, dmg=760, defense=155, speed=12, xp=2030, gold={1450,2225},lootRarity="Legendary" }
+EnemyData["Pakrahmatmamat"]      = { tier=4, hp=9000,  dmg=500, defense=110, speed=11, xp=1260, gold={900,1400}, lootRarity="Legendary" }
+EnemyData["Job Job Job Sahur"]          = { tier=4, hp=13500, dmg=720, defense=145, speed=12, xp=1890, gold={1350,2075},lootRarity="Legendary" }
+EnemyData["Avocadini Antilopini"]          = { tier=4, hp=14500, dmg=760, defense=155, speed=12, xp=2030, gold={1450,2225},lootRarity="Legendary" }
 
 -- ─── Mythic (tier 5) ─────────────────────────────────────────────────────────
 EnemyData["Frigo Camelo"]             = { tier=5, hp=20000,  dmg=1000, defense=200, speed=12, xp=3000,  gold={2000,3200},  lootRarity="Mythic" }
@@ -66,12 +66,12 @@ EnemyData["Bombombini Gusini"]        = { tier=5, hp=65000,  dmg=2800, defense=3
 EnemyData["Cavallo Virtuso"]          = { tier=5, hp=120000, dmg=5000, defense=400, speed=14, xp=18000, gold={12000,19000},lootRarity="Mythic" }
 EnemyData["Gorillo Watermelondrillo"] = { tier=5, hp=140000, dmg=5600, defense=420, speed=14, xp=21000, gold={14000,22000},lootRarity="Mythic" }
 EnemyData["Avocadorilla"]             = { tier=5, hp=110000, dmg=4800, defense=390, speed=14, xp=16500, gold={11000,17500},lootRarity="Mythic" }
-EnemyData["Tob Tobi Tobi"]            = { tier=5, hp=155000, dmg=6000, defense=440, speed=14, xp=23000, gold={15500,24500},lootRarity="Mythic" }
+EnemyData["Bandito Axolito"]          = { tier=5, hp=155000, dmg=6000, defense=440, speed=14, xp=23000, gold={15500,24500},lootRarity="Mythic" }
 EnemyData["Ganganzelli Trulala"]      = { tier=5, hp=170000, dmg=6500, defense=460, speed=14, xp=25500, gold={17000,27000},lootRarity="Mythic" }
-EnemyData["Cachorrito Melonito"]      = { tier=5, hp=200000, dmg=7500, defense=500, speed=15, xp=30000, gold={20000,32000},lootRarity="Mythic" }
-EnemyData["Elefanto Frigo"]           = { tier=5, hp=220000, dmg=8000, defense=520, speed=15, xp=33000, gold={22000,35000},lootRarity="Mythic" }
-EnemyData["Toiletto Focaccino"]       = { tier=5, hp=245000, dmg=8800, defense=550, speed=15, xp=37000, gold={24500,39000},lootRarity="Mythic" }
-EnemyData["Tree Tree Tree Sahur"]     = { tier=5, hp=260000, dmg=9200, defense=570, speed=15, xp=39000, gold={26000,41500},lootRarity="Mythic" }
+EnemyData["Los Bros"]                 = { tier=5, hp=200000, dmg=7500, defense=500, speed=15, xp=30000, gold={20000,32000},lootRarity="Mythic" }
+EnemyData["Tigrilini Watermelini"]    = { tier=5, hp=220000, dmg=8000, defense=520, speed=15, xp=33000, gold={22000,35000},lootRarity="Mythic" }
+EnemyData["To to to Sahur"]           = { tier=5, hp=245000, dmg=8800, defense=550, speed=15, xp=37000, gold={24500,39000},lootRarity="Mythic" }
+EnemyData["Las Capuchinas"]     = { tier=5, hp=260000, dmg=9200, defense=570, speed=15, xp=39000, gold={26000,41500},lootRarity="Mythic" }
 EnemyData["Carloo"]                   = { tier=5, hp=230000, dmg=8200, defense=530, speed=15, xp=34500, gold={23000,36500},lootRarity="Mythic" }
 EnemyData["Spioniro Golubiro"]        = { tier=5, hp=45000,  dmg=2000, defense=280, speed=13, xp=7000,  gold={4500,7200},  lootRarity="Mythic" }
 
@@ -89,8 +89,8 @@ EnemyData["Las Sis"]               = { tier=7, hp=10000000,  dmg=300000,  defens
 EnemyData["La Grande Combinasion"] = { tier=7, hp=50000000,  dmg=1000000, defense=8000,  speed=19, xp=10000000, gold={5000000,10000000},  lootRarity="Secret" }
 EnemyData["Dragon Cannelloni"]     = { tier=7, hp=500000000, dmg=5000000, defense=20000, speed=20, xp=100000000,gold={50000000,100000000},lootRarity="Secret" }
 
-EnemyData["Skibidi Toilet"]        = { tier=8, hp=1000000000,dmg=10000000,defense=50000, speed=20, xp=300000000,gold={100000000,300000000},lootRarity="Secret" }
+EnemyData["Los Tralaleritos"]        = { tier=8, hp=1000000000,dmg=10000000,defense=50000, speed=20, xp=300000000,gold={100000000,300000000},lootRarity="Secret" }
 EnemyData["Strawberry Elephant"]   = { tier=8, hp=800000000, dmg=8000000, defense=45000, speed=20, xp=250000000,gold={80000000,250000000}, lootRarity="Secret" }
-EnemyData["Meowl"]                 = { tier=8, hp=1200000000,dmg=12000000,defense=55000, speed=21, xp=400000000,gold={120000000,400000000}, lootRarity="Secret" }
+EnemyData["Tung Tung Tung Sahur"]                 = { tier=8, hp=1200000000,dmg=12000000,defense=55000, speed=21, xp=400000000,gold={120000000,400000000}, lootRarity="Secret" }
 
 return EnemyData
