@@ -320,7 +320,7 @@ local function requestMove(tx, tz)
 end
 
 -- ─── PlayerMoved remote ───────────────────────────────────────────────────────
-PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
+PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId, enemyTx, enemyTz)
 	-- ── Other player ─────────────────────────────────────────────────────────
 	if userId ~= player.UserId then
 		local other = Players:GetPlayerByUserId(userId)
@@ -411,6 +411,16 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId)
 			-- first-step update if another attack-move arrived during the loop.
 			isMoving = false
 			stopWalk()
+
+			-- Face the enemy after arriving at the adjacent tile
+			if hrp and isAlive() and enemyTx and enemyTz then
+				local dir = Vector3.new(
+					enemyTx - currentTileX, 0, enemyTz - currentTileZ)
+				if dir.Magnitude > 0 then
+					hrp.CFrame = CFrame.lookAt(
+						hrp.Position, hrp.Position + dir.Unit)
+				end
+			end
 		end)
 		return
 	end

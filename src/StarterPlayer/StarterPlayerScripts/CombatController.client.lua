@@ -2,16 +2,19 @@
 -- Click-to-attack system with hover highlights and walk-to-enemy.
 -- Click enemy → RequestAttack → server walks player to enemy → auto-attack.
 -- Also handles: HP bar sync, screen flash on damage, hit sound.
--- Skips input when TargetingController (hold-E) is active.
+-- Skips input when TargetingController (hold-Q) is active.
+--
+-- FIX: Arc indicator is now driven by its own independent RenderStepped loop
+-- inside CombatController, so it updates every frame regardless of whether
+-- TargetingController's hold-Q mode is active. Previously refreshArc() was
+-- only called on click/hover events and one RenderStepped that bailed early
+-- when targeting was active — meaning the yellow "locked" ring never moved.
 
 local Players           = game:GetService("Players")
 local TweenService      = game:GetService("TweenService")
+local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService  = game:GetService("UserInputService")
-local RunService        = game:GetService("RunService")
-
--- Lazy-loaded reference to new targeting system
-local TargetingController
 
 local Config  = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -27,7 +30,9 @@ local player   = Players.LocalPlayer
 local hrp      = nil
 local humanoid = nil
 
-local function isTargetingActive()
+-- Lazy-loaded reference to hold-Q targeting system
+local TargetingController = nil
+local function isQTargetingActive()
 	if not TargetingController then
 		local ok, mod = pcall(require, script.Parent:WaitForChild("TargetingController"))
 		if ok then TargetingController = mod end
@@ -35,15 +40,18 @@ local function isTargetingActive()
 	return TargetingController and TargetingController.IsActive()
 end
 
--- Attack state
-local currentTarget: Model?     = nil
-local currentTargetId: string?  = nil
-local attackMode = false -- when true, MovementController skips tile clicks
+-- ─── Attack / hover state ────────────────────────────────────────────────────
+local currentTarget:   Model?  = nil
+local currentTargetId: string? = nil
+local attackMode = false
 
--- Hover / lock state
 local hoveredEnemy: Model? = nil
-local arcLocked = false
-local HOVER_COLOR = Color3.fromRGB(0, 220, 255)
+
+-- ─── Arc indicator state ──────────────────────────────────────────────────────
+-- The arc shows a rotating ring around the locked/hovered enemy.
+-- LOCKED  (yellow) = player has clicked and is attacking this enemy
+-- HOVER   (cyan)   = mouse is over an enemy but not yet clicked
+local HOVER_COLOR  = Color3.fromRGB(0, 220, 255)
 local LOCKED_COLOR = Color3.fromRGB(255, 220, 50)
 
 -- ─── Find enemy model from a BasePart ─────────────────────────────────────────
@@ -58,49 +66,50 @@ local function getEnemyFromPart(part: BasePart): Model?
 	return nil
 end
 
--- ─── Arc indicator management ─────────────────────────────────────────────────
-local function refreshArc()
-	if not TargetingController then return end
-	if arcLocked and currentTarget then
-		local pp = currentTarget.PrimaryPart and currentTarget.PrimaryPart.Position
-			or currentTarget:GetPivot().Position
-		TargetingController.ShowArc(pp, LOCKED_COLOR)
-	elseif hoveredEnemy then
-		local pp = hoveredEnemy.PrimaryPart and hoveredEnemy.PrimaryPart.Position
-			or hoveredEnemy:GetPivot().Position
-		TargetingController.ShowArc(pp, HOVER_COLOR)
+-- ─── Arc indicator (driven every frame by RenderStepped) ─────────────────────
+-- We drive the arc ourselves so it always follows the target regardless of
+-- whether hold-Q is active.
+
+local function getArcWorldPos(): Vector3?
+	-- Priority: locked target > hovered enemy
+	local model = currentTarget or hoveredEnemy
+	if not model or not model.Parent then return nil end
+	if model:GetAttribute("State") == "dead" then return nil end
+	local pp = model.PrimaryPart
+	return pp and pp.Position or model:GetPivot().Position
+end
+
+local function getArcColor(): Color3
+	if currentTarget then return LOCKED_COLOR end
+	return HOVER_COLOR
+end
+
+RunService.RenderStepped:Connect(function()
+	if not TargetingController then
+		local ok, mod = pcall(require, script.Parent:WaitForChild("TargetingController"))
+		if ok then TargetingController = mod end
+		if not TargetingController then return end
+	end
+
+	local wp = getArcWorldPos()
+	if wp then
+		TargetingController.ShowArc(wp, getArcColor())
 	else
 		TargetingController.HideArc()
 	end
-end
-
--- ─── Hover helpers ────────────────────────────────────────────────────────────
-local function clearHover()
-	hoveredEnemy = nil
-	refreshArc()
-end
-
-local function setHover(model: Model)
-	if not model or not model.Parent then clearHover() return end
-	hoveredEnemy = model
-	refreshArc()
-end
+end)
 
 -- ─── Target management ────────────────────────────────────────────────────────
 local function setTarget(model: Model?)
 	currentTarget   = model
 	currentTargetId = model and model:GetAttribute("EnemyId") or nil
 	attackMode      = model ~= nil
-	arcLocked = model ~= nil
-	refreshArc()
 end
 
 local function clearTarget()
 	currentTarget   = nil
 	currentTargetId = nil
 	attackMode      = false
-	arcLocked = false
-	refreshArc()
 end
 
 -- ─── Character setup ──────────────────────────────────────────────────────────
@@ -109,23 +118,12 @@ local function setupCharacter(character)
 	humanoid = character:FindFirstChildOfClass("Humanoid")
 		or character:WaitForChild("Humanoid", 10)
 
-	currentTarget   = nil
-	currentTargetId = nil
-	attackMode      = false
-	arcLocked = false
-	clearHover()
+	clearTarget()
+	hoveredEnemy = nil
 end
 
 player.CharacterAdded:Connect(setupCharacter)
 if player.Character then setupCharacter(player.Character) end
-
--- ─── Arc position update loop ─────────────────────────────────────────────────
-RunService.RenderStepped:Connect(function()
-	if not humanoid or humanoid.Health <= 0 then return end
-	if not arcLocked and not hoveredEnemy then return end
-	if isTargetingActive() then return end
-	refreshArc()
-end)
 
 -- ─── Sound helper ─────────────────────────────────────────────────────────────
 local function playSound(soundId, parent)
@@ -144,12 +142,11 @@ end
 local mouse = player:GetMouse()
 mouse.Button1Down:Connect(function()
 	if not humanoid or humanoid.Health <= 0 then return end
-	if isTargetingActive() then return end
+	if isQTargetingActive() then return end
 
 	local target = mouse.Target
 	if not target then return end
 
-	-- Check if clicked on an enemy (walk up hierarchy to find Model with EnemyId)
 	local enemyModel = getEnemyFromPart(target)
 	if enemyModel and enemyModel:GetAttribute("State") ~= "dead" then
 		local enemyId = enemyModel:GetAttribute("EnemyId")
@@ -170,31 +167,29 @@ end)
 -- ─── Hover detection ──────────────────────────────────────────────────────────
 mouse.Move:Connect(function()
 	if not humanoid or humanoid.Health <= 0 then
-		clearHover()
+		hoveredEnemy = nil
 		return
 	end
-	if isTargetingActive() then
-		clearHover()
+	if isQTargetingActive() then
+		hoveredEnemy = nil
 		return
 	end
 
 	local target = mouse.Target
 	if not target then
-		clearHover()
+		hoveredEnemy = nil
 		return
 	end
 
 	local enemyModel = getEnemyFromPart(target)
 	if enemyModel and enemyModel:GetAttribute("State") ~= "dead" then
-		if hoveredEnemy ~= enemyModel then
-			setHover(enemyModel)
-		end
+		hoveredEnemy = enemyModel
 	else
-		clearHover()
+		hoveredEnemy = nil
 	end
 end)
 
--- ─── Escape key → deselect ───────────────────────────────────────────────────
+-- ─── Escape key → deselect ────────────────────────────────────────────────────
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if input.KeyCode == Enum.KeyCode.Escape then

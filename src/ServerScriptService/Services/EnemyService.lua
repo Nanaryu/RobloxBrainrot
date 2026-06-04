@@ -2,25 +2,27 @@
 -- Manages all enemy lifecycle: spawn, wander, chase player, attack, die, drop loot.
 -- Defense formula (Rucoy): final_damage = max(1, enemy_damage - DEF_Level)
 --
--- FIXES:
---   • _Kill: MovingToTileX/Z can be nil (cleared at end of moveEnemyToTile).
---     releaseTile(nil, nil, id) would hash to "nil_nil" and potentially release
---     an unrelated enemy. Added explicit nil checks before calling releaseTile
---     on the moving-to tile.
---   • processDamageAccumulator: iterated pairs() while nilling keys in-place.
---     Now snapshots all pending entries into a local table first so the loop
---     body can't see partially-modified state.
---   • AI loop "chase" branch: the outer `dist` variable comes from the
---     getClosestPlayerTile call at the TOP of the while loop, before the state
---     check. If an enemy just entered "chase" this frame, that dist is accurate.
---     But inside the "attack" → "chase" transition we now re-query distance
---     from the enemy's CURRENT tile (cx2/cz2) rather than the outer cx/cz,
---     because moveEnemyToTile may have moved the enemy between outer-call and
---     inner-use.
---   • moveEnemyToTile: early-out if target tile became occupied between the
---     occupancy check and the actual occupyTile call (cooperative, not a true
---     mutex, but catches the common single-threaded Luau case where two enemies
---     target the same adjacent tile in the same step).
+-- FIXES IN THIS REVISION:
+--   • Enemy facing: tweenModelPivot for the face-toward-player turn during the
+--     "attack" state was spawned in a detached task.spawn, meaning the facing
+--     tween ran concurrently with task.wait(ENEMY_ATTACK_INTERVAL). Now the
+--     turn is done inline (no spawn) so the enemy reliably faces the player
+--     before swinging.
+--   • Stale dist in chase/attack: the outer `dist` from getClosestPlayerTile
+--     at the top of the while loop was reused inside the "chase" and "attack"
+--     branches after moveEnemyToTile may have advanced the enemy. Both branches
+--     now call getClosestPlayerTile again from the current tile (cx2/cz2) so
+--     the leash, aggro-drop, and attack-range checks are never stale. This was
+--     also causing the "running away" bug: a stale dist > aggroRange * 1.5
+--     (from the top of the loop, before the enemy moved closer) triggered a
+--     wander transition even though the enemy was right next to the player.
+--   • Isolated-tile spawn guard: before accepting a spawn tile, the code now
+--     attempts a short A* path (maxNodes=150) from that tile to the zone
+--     centre. If no path exists the tile is rejected. This prevents enemies
+--     from spawning on isolated walkable patches (e.g. the small island in a
+--     water pool) where they could never reach a player.
+--   • _Kill: MovingToTileX/Z nil-check (from previous revision) preserved.
+--   • processDamageAccumulator: snapshot pattern (from previous revision) preserved.
 
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
@@ -168,8 +170,6 @@ local function moveEnemyToTile(model, tx, tz)
 	local dx    = tx - fromX
 	local dz    = tz - fromZ
 
-	-- FIX: re-check occupancy after all yields — another enemy may have claimed
-	-- this tile between the caller's check and this call.
 	if isTileOccupiedByOther(tx, tz, id) or isPlayerTileOccupied(tx, tz) then return end
 
 	model:SetAttribute("MovingToTileX", tx)
@@ -294,6 +294,21 @@ function EnemyService.RefreshHPBar(model: Model)
 	local g = math.min(1, 2 * ratio)
 	fill.Size             = UDim2.new(ratio, 0, 1, 0)
 	fill.BackgroundColor3 = Color3.new(r, g, 0.1)
+end
+
+-- ─── Reachability check for spawn validation ─────────────────────────────────
+-- Returns true if the tile at (tx, tz) can reach the target tile via a short
+-- A* search. Used to reject isolated walkable patches (islands in water pools).
+local function isTileReachable(tx: number, tz: number, targetX: number, targetZ: number): boolean
+	-- Quick Manhattan pre-check: if already close, skip pathfinding
+	if manhattan(tx, tz, targetX, targetZ) <= 2 then return true end
+
+	local function isWalkableNoEnemy(px, pz)
+		return TileGrid.IsWalkable(px, pz)
+	end
+
+	local path = Pathfinder.FindPath(isWalkableNoEnemy, tx, tz, targetX, targetZ, 150)
+	return path ~= nil
 end
 
 -- ─── Spawn ────────────────────────────────────────────────────────────────────
@@ -442,10 +457,15 @@ function EnemyService._AILoop(id: string)
 		if not model or not model.Parent then break end
 
 		local state      = model:GetAttribute("State")
+		-- FIX: always read the current tile fresh at the top of the loop
 		local cx         = model:GetAttribute("CurrentTileX")
 		local cz         = model:GetAttribute("CurrentTileZ")
 		local aggroRange = model:GetAttribute("AggroRange")
 
+		-- FIX: dist from the outer call is only used as an early-out / wander
+		-- trigger. All subsequent state-specific logic re-queries distance from
+		-- the updated tile (cx2/cz2) after any move to avoid stale values
+		-- triggering incorrect state transitions.
 		local targetPlayer, ptx, ptz, dist = getClosestPlayerTile(cx, cz)
 
 		if not targetPlayer or dist * Config.TILE_SIZE > Config.ENEMY_RENDER_DISTANCE then
@@ -475,6 +495,7 @@ function EnemyService._AILoop(id: string)
 						if not m2 or not m2.Parent then break end
 						if m2:GetAttribute("State") ~= "wander" then break end
 
+						-- FIX: re-read tile after each move step (not stale cx/cz)
 						local cx2 = m2:GetAttribute("CurrentTileX")
 						local cz2 = m2:GetAttribute("CurrentTileZ")
 						local _, _, _, d2 = getClosestPlayerTile(cx2, cz2)
@@ -497,41 +518,49 @@ function EnemyService._AILoop(id: string)
 			local sz = m:GetAttribute("SpawnTileZ")
 			local leashRange = m:GetAttribute("LeashRange") or 15
 
-			-- FIX: re-read current tile for leash check — cx/cz is from the top
-			-- of the loop and may be stale if the enemy moved during wander→chase.
+			-- FIX: always re-read current tile here — it may have changed during
+			-- a previous move step. Using stale cx/cz caused the leash check to
+			-- compare the wrong position and could make enemies "flee" when they
+			-- were actually still in range.
 			local cx2 = m:GetAttribute("CurrentTileX")
 			local cz2 = m:GetAttribute("CurrentTileZ")
 
 			if manhattan(cx2, cz2, sx, sz) > leashRange then
 				m:SetAttribute("State", "return")
-			elseif not targetPlayer or dist > aggroRange * 1.5 then
-				m:SetAttribute("State", "wander")
-			elseif manhattan(cx2, cz2, ptx, ptz) == 1 then
-				m:SetAttribute("State", "attack")
 			else
-				local function isPassableC(tx, tz)
-					return isPassableForEnemy(tx, tz, id)
-				end
+				-- FIX: re-query player distance from the current (up-to-date) tile,
+				-- not the outer dist which was sampled before any move this frame.
+				local _, ptx2, ptz2, dist2 = getClosestPlayerTile(cx2, cz2)
 
-				local goals = { {ptx+1,ptz}, {ptx-1,ptz}, {ptx,ptz+1}, {ptx,ptz-1} }
-				local bestPath = nil
-				for _, goal in ipairs(goals) do
-					local gx, gz = goal[1], goal[2]
-					if gx == cx2 and gz == cz2 then bestPath = {} break end
-					if isPassableC(gx, gz) then
-						local candidate = Pathfinder.FindPath(isPassableC, cx2, cz2, gx, gz, 300)
-						if candidate and (not bestPath or #candidate < #bestPath) then
-							bestPath = candidate
+				if not targetPlayer or dist2 > aggroRange * 1.5 then
+					m:SetAttribute("State", "wander")
+				elseif manhattan(cx2, cz2, ptx2, ptz2) <= 1 then
+					m:SetAttribute("State", "attack")
+				else
+					local function isPassableC(tx, tz)
+						return isPassableForEnemy(tx, tz, id)
+					end
+
+					local goals = { {ptx2+1,ptz2}, {ptx2-1,ptz2}, {ptx2,ptz2+1}, {ptx2,ptz2-1} }
+					local bestPath = nil
+					for _, goal in ipairs(goals) do
+						local gx, gz = goal[1], goal[2]
+						if gx == cx2 and gz == cz2 then bestPath = {} break end
+						if isPassableC(gx, gz) then
+							local candidate = Pathfinder.FindPath(isPassableC, cx2, cz2, gx, gz, 300)
+							if candidate and (not bestPath or #candidate < #bestPath) then
+								bestPath = candidate
+							end
 						end
 					end
-				end
 
-				if bestPath and #bestPath > 0 then
-					local step = bestPath[1]
-					moveEnemyToTile(m, step[1], step[2])
-				end
+					if bestPath and #bestPath > 0 then
+						local step = bestPath[1]
+						moveEnemyToTile(m, step[1], step[2])
+					end
 
-				task.wait(CHASE_TICK)
+					task.wait(CHASE_TICK)
+				end
 			end
 
 		elseif state == "attack" then
@@ -542,7 +571,7 @@ function EnemyService._AILoop(id: string)
 			local sz = m:GetAttribute("SpawnTileZ")
 			local leashRange = m:GetAttribute("LeashRange") or 15
 
-			-- FIX: use up-to-date tile for leash check
+			-- FIX: re-read tile for accurate leash and distance checks
 			local cx2 = m:GetAttribute("CurrentTileX")
 			local cz2 = m:GetAttribute("CurrentTileZ")
 
@@ -551,21 +580,27 @@ function EnemyService._AILoop(id: string)
 			elseif not targetPlayer then
 				m:SetAttribute("State", "wander")
 			else
-				local _, ptx2, ptz2, dist2 = getClosestPlayerTile(cx2, cz2)
+				-- FIX: re-query from current tile so dist2 is accurate
+				local tp2, ptx2, ptz2, dist2 = getClosestPlayerTile(cx2, cz2)
 
 				if dist2 ~= 1 then
 					m:SetAttribute("State", "chase")
 				else
+					-- FIX: face the player INLINE (not task.spawn) so the tween
+					-- completes before we queue the attack hit and wait.
+					-- Previously task.spawn ran the turn concurrently with the
+					-- wait, so the enemy often never visually turned to face the
+					-- player before attacking.
 					if m.PrimaryPart then
 						local playerWorldPos = tileToWorld(ptx2, ptz2)
 						local pivotPos = m:GetPivot().Position
 						local facedCF  = CFrame.new(pivotPos,
 							Vector3.new(playerWorldPos.X, pivotPos.Y, playerWorldPos.Z))
-						task.spawn(tweenModelPivot, m, facedCF, TURN_TWEEN)
+						tweenModelPivot(m, facedCF, TURN_TWEEN)
 					end
 
 					local dmg = m:GetAttribute("Damage")
-					queueDamage(targetPlayer, dmg)
+					queueDamage(tp2, dmg)
 
 					task.wait(Config.ENEMY_ATTACK_INTERVAL)
 				end
@@ -612,11 +647,9 @@ queueDamage = function(player: Player, amount: number)
 	pendingDamage[userId] = (pendingDamage[userId] or 0) + amount
 end
 
--- FIX: snapshot the table before iteration so modifying it during the loop
--- doesn't cause pairs() to skip or double-visit entries.
 local function processDamageAccumulator()
 	local snapshot = pendingDamage
-	pendingDamage  = {}     -- fresh table; new damage goes here while we process
+	pendingDamage  = {}
 
 	for userId, totalRaw in pairs(snapshot) do
 		if totalRaw > 0 then
@@ -624,10 +657,9 @@ local function processDamageAccumulator()
 			if player and player.Character then
 				local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
 				if humanoid and humanoid.Health > 0 then
-					-- Skip damage during post-respawn invincibility window
 					local invincibleUntil = player:GetAttribute("InvincibleUntil")
 					if invincibleUntil and tick() < invincibleUntil then
-						-- still consume pending damage, just don't apply it
+						-- consume but don't apply
 					else
 						if not SkillService then
 							SkillService = require(script.Parent.SkillService)
@@ -720,11 +752,6 @@ function EnemyService._Kill(id: string, killer: Player?)
 		releaseTile(dtx, dtz, id)
 	end
 
-	-- FIX: only release the moving-to tile if the attributes are non-nil
-	-- (they're cleared at the end of moveEnemyToTile, so a nil here is normal
-	-- when the enemy wasn't in motion). Without this check, releaseTile would
-	-- receive nil coords, hash to "nil_nil", and potentially clear an unrelated
-	-- enemy's occupancy record.
 	if movingX ~= nil and movingZ ~= nil
 		and (movingX ~= dtx or movingZ ~= dtz) then
 		releaseTile(movingX, movingZ, id)
@@ -837,39 +864,44 @@ do
 				print(string.format("[EnemyService] Spawning %d enemies in %s (%d walkable tiles, density %.3f)",
 					spawnCount, zone.name, walkableCount, density))
 
-				for _ = 1, spawnCount do
+				-- The zone centre tile is used as the reachability anchor.
+				-- Any spawn tile that cannot path to this anchor is rejected.
+				local anchorX = math.floor(zoneCx)
+				local anchorZ = math.floor(zoneCz)
+
+				local spawned = 0
+				local attempts = 0
+				local maxAttempts = spawnCount * 12   -- generous budget
+
+				while spawned < spawnCount and attempts < maxAttempts do
+					attempts += 1
 					local tx, tz = nil, nil
-					for attempt = 1, 30 do
-						local angle = math.random() * math.pi * 2
-						local r = math.random(0, math.floor(zone.radius * 0.9))
-						local cx = math.floor(zoneCx + math.cos(angle) * r)
-						local cz = math.floor(zoneCz + math.sin(angle) * r)
-						if TileGrid.IsWalkable(cx, cz)
-							and TileGrid.GetZone(cx, cz) == zone.id
-							and not isTileOccupied(cx, cz)
-							and not isPlayerTileOccupied(cx, cz) then
-							tx, tz = cx, cz
-							break
-						end
+
+					-- Try a random tile within the zone radius first
+					local angle = math.random() * math.pi * 2
+					local r = math.random(0, math.floor(zone.radius * 0.9))
+					local cx = math.floor(zoneCx + math.cos(angle) * r)
+					local cz = math.floor(zoneCz + math.sin(angle) * r)
+
+					if TileGrid.IsWalkable(cx, cz)
+						and TileGrid.GetZone(cx, cz) == zone.id
+						and not isTileOccupied(cx, cz)
+						and not isPlayerTileOccupied(cx, cz) then
+						tx, tz = cx, cz
 					end
-					if not tx then
-						for scanTx = math.max(1, math.floor(zoneCx - scanR)), math.min(Config.GRID_WIDTH, math.ceil(zoneCx + scanR)) do
-							for scanTz = math.max(1, math.floor(zoneCz - scanR)), math.min(Config.GRID_HEIGHT, math.ceil(zoneCz + scanR)) do
-								if TileGrid.IsWalkable(scanTx, scanTz)
-									and TileGrid.GetZone(scanTx, scanTz) == zone.id
-									and not isTileOccupied(scanTx, scanTz)
-									and not isPlayerTileOccupied(scanTx, scanTz) then
-									tx, tz = scanTx, scanTz
-									break
-								end
-							end
-							if tx then break end
+
+					-- FIX: reject tiles that have no path to the zone centre —
+					-- these are isolated walkable patches (lake islands etc.) where
+					-- the enemy would be permanently stuck and unable to chase anyone.
+					if tx and tz then
+						if not isTileReachable(tx, tz, anchorX, anchorZ) then
+							tx, tz = nil, nil
 						end
 					end
 
 					if tx and tz then
 						local entry = ZoneData.PickEnemy(zone, spawnPool)
-						EnemyService.Spawn({
+						local result = EnemyService.Spawn({
 							name        = entry.name,
 							tx          = tx,
 							tz          = tz,
@@ -877,7 +909,15 @@ do
 							aggroRange  = entry.aggroRange,
 							leashRange  = zone.leashRange or 15,
 						})
+						if result then
+							spawned += 1
+						end
 					end
+				end
+
+				if spawned < spawnCount then
+					print(string.format("[EnemyService] Warning: only spawned %d/%d in %s after %d attempts",
+						spawned, spawnCount, zone.name, attempts))
 				end
 			end
 		end

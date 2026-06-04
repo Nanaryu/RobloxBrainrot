@@ -360,7 +360,7 @@ startChase = function(player, targetModel)
 			chaseLastSentPath[userId]       = path
 
 			local msSeq = ms.CancelMovement(player)
-			PlayerMoved:FireAllClients(player.UserId, adjX, adjZ, path, -1)
+			PlayerMoved:FireAllClients(player.UserId, adjX, adjZ, path, -1, etx, etz)
 
 			local speed = ms.GetPlayerSpeed(player)
 			chaseLastSentSpeed[userId] = speed
