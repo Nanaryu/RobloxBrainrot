@@ -155,14 +155,35 @@ local function getTilePivotPosition(model: Model, tx: number, tz: number): Vecto
 end
 
 local function tweenModelPivot(model: Model, targetCF: CFrame, tweenInfo: TweenInfo)
+	if not model or not model.Parent then return end
+
 	local pivotValue   = Instance.new("CFrameValue")
 	pivotValue.Value   = model:GetPivot()
-	local connection   = pivotValue.Changed:Connect(function(value)
+
+	local connection = pivotValue.Changed:Connect(function(value)
 		if model.Parent then model:PivotTo(value) end
 	end)
+
 	local tween = TweenService:Create(pivotValue, tweenInfo, { Value = targetCF })
 	tween:Play()
-	tween.Completed:Wait()
+
+	-- Guard: if the model is destroyed while the tween is playing (e.g. killed
+	-- mid-move) the Completed signal would never fire, hanging the AI coroutine
+	-- forever and eventually triggering "Script timeout: exhausted allowed
+	-- execution time". We poll on a short Heartbeat loop instead of a naked Wait.
+	local deadline = tick() + tweenInfo.Time + 1   -- 1-second safety margin
+	while tween.PlaybackState ~= Enum.PlaybackState.Completed do
+		if not model.Parent then
+			tween:Cancel()
+			break
+		end
+		if tick() > deadline then
+			tween:Cancel()
+			break
+		end
+		task.wait()   -- yield one Heartbeat step; keeps CPU usage near zero
+	end
+
 	connection:Disconnect()
 	pivotValue:Destroy()
 end
@@ -545,6 +566,9 @@ function EnemyService._AILoop(id: string)
 				if not targetPlayer or dist2 > aggroRange * 1.5 then
 					m:SetAttribute("State", "wander")
 				elseif manhattan(cx2, cz2, ptx2, ptz2) <= 1 then
+					-- dist==0 (same tile) or dist==1 (adjacent): both count as attack range.
+					-- This prevents the chase↔attack thrash loop when a player somehow
+					-- ends up on the same tile as an enemy.
 					m:SetAttribute("State", "attack")
 				else
 					local function isPassableC(tx, tz)
@@ -617,7 +641,8 @@ function EnemyService._AILoop(id: string)
 				-- FIX: re-query from current tile so dist2 is accurate
 				local tp2, ptx2, ptz2, dist2 = getClosestPlayerTile(cx2, cz2)
 
-				if dist2 ~= 1 then
+				if dist2 > 1 then
+					-- Player has moved out of attack range (or off the same tile) → chase
 					m:SetAttribute("State", "chase")
 				else
 					-- FIX: face the player INLINE (not task.spawn) so the tween
