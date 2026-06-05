@@ -16,6 +16,11 @@
 --     also causing the "running away" bug: a stale dist > aggroRange * 1.5
 --     (from the top of the loop, before the enemy moved closer) triggered a
 --     wander transition even though the enemy was right next to the player.
+--   • Chase step selection: the old code took the first A* path found (closest
+--     goal), whose first step could go AWAY from the player when obstacles
+--     forced a detour. Now ALL 4 goals are tried and the step that minimises
+--     Manhattan distance to the player is chosen. A greedy fallback (pick the
+--     neighbour tile closest to the player) runs when every A* search fails.
 --   • Isolated-tile spawn guard: before accepting a spawn tile, the code now
 --     attempts a short A* path (maxNodes=150) from that tile to the zone
 --     centre. If no path exists the tile is rejected. This prevents enemies
@@ -546,29 +551,46 @@ function EnemyService._AILoop(id: string)
 						return isPassableForEnemy(tx, tz, id)
 					end
 
-					-- Sort goals by manhattan distance to enemy (closest first),
-					-- stop at the first valid path — avoids running 4 pathfinds.
 					local goals = { {ptx2+1,ptz2}, {ptx2-1,ptz2}, {ptx2,ptz2+1}, {ptx2,ptz2-1} }
 					table.sort(goals, function(a, b)
 						return manhattan(cx2, cz2, a[1], a[2]) < manhattan(cx2, cz2, b[1], b[2])
 					end)
 
-					local bestPath = nil
+					local bestStep = nil
+					local bestStepDist = manhattan(cx2, cz2, ptx2, ptz2)
+
 					for _, goal in ipairs(goals) do
 						local gx, gz = goal[1], goal[2]
-						if gx == cx2 and gz == cz2 then bestPath = {} break end
+						if gx == cx2 and gz == cz2 then bestStep = nil break end
 						if isPassableC(gx, gz) then
 							local candidate = Pathfinder.FindPath(isPassableC, cx2, cz2, gx, gz, 150)
-							if candidate then
-								bestPath = candidate
-								break  -- closest valid goal found, stop
+							if candidate and #candidate > 0 then
+								local step = candidate[1]
+								local stepDist = manhattan(step[1], step[2], ptx2, ptz2)
+								if stepDist < bestStepDist then
+									bestStep = step
+									bestStepDist = stepDist
+								end
 							end
 						end
 					end
 
-					if bestPath and #bestPath > 0 then
-						local step = bestPath[1]
-						moveEnemyToTile(m, step[1], step[2])
+					if not bestStep then
+						local offsets = { {1,0}, {-1,0}, {0,1}, {0,-1} }
+						for _, off in ipairs(offsets) do
+							local nx, nz = cx2 + off[1], cz2 + off[2]
+							if isPassableC(nx, nz) then
+								local d = manhattan(nx, nz, ptx2, ptz2)
+								if d < bestStepDist then
+									bestStep = { nx, nz }
+									bestStepDist = d
+								end
+							end
+						end
+					end
+
+					if bestStep then
+						moveEnemyToTile(m, bestStep[1], bestStep[2])
 					end
 
 					task.wait(CHASE_TICK)
