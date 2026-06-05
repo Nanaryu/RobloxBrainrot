@@ -40,15 +40,15 @@ local EVENTS = {
 	"RerollResult",       -- Server → Client  (newItemData | false)
 
 	-- Shops
-	"OpenShopRequest",    -- Client → Server  (durationIndex)
-	"BuyFromShop",        -- Client → Server  (shopOwnerId, listingId)
-	"ShopListUpdated",    -- Server → Client  (shopData)
+	"ShopListUpdated",    -- Server → Client  (shopData) — NPC stock refresh broadcast
+	"BuyShopItem",        -- Client → Server  (listingIndex) — NPC shop buy
 }
 
 local FUNCTIONS = {
 	"GetInventory",       -- Client → Server, returns serialised inventory table
 	"GetEquipment",       -- Client → Server, returns equipped items table
 	"GetNearbyShops",     -- Client → Server, returns nearby shop list table
+	"GetShopList",        -- Client → Server, returns NPC shop stock table
 }
 
 for _, name in ipairs(EVENTS) do

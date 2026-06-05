@@ -420,6 +420,11 @@ function LootService.Drop(model: Model, killer: Player?)
 	ItemDropped:FireAllClients(item, worldPos)
 end
 
+-- ─── Public: give item to player (used by ShopService) ────────────────────────
+function LootService.GiveItem(player: Player, item: table)
+	giveItem(player, item)
+end
+
 -- ─── Public: get serialized inventory ────────────────────────────────────────
 function LootService.GetInventory(player: Player): { table }
 	return serializeInventory(player)

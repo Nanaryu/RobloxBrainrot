@@ -81,6 +81,11 @@ function Leaderboard.AddCoins(player: Player, amount: number)
 	refreshDisplay(player)
 end
 
+function Leaderboard.GetCoins(player: Player): number
+	local raw = rawStats[player.UserId]
+	return raw and raw.coins or 0
+end
+
 -- Add character XP and recompute display level.
 -- Called by EnemyService on enemy kill.
 function Leaderboard.AddXP(player: Player, amount: number)

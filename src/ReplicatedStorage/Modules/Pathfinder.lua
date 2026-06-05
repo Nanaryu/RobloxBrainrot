@@ -1,5 +1,6 @@
 -- ReplicatedStorage/Modules/Pathfinder.lua
 -- Tile-based A* pathfinding with binary min-heap open set.
+-- Uses lazy deletion for stale heap entries (standard pattern).
 -- Usage:
 --   local Pathfinder = require(...)
 --   local path = Pathfinder.FindPath(isWalkableFn, startX, startZ, goalX, goalZ, maxNodes)
@@ -21,6 +22,8 @@ local NEIGHBOURS = { {1,0}, {-1,0}, {0,1}, {0,-1} }
 
 -- ─── Binary min-heap (f-score, then h as tiebreaker) ─────────────────────────
 -- Stores { x, z, f, h } nodes. Heap[1] is always the lowest f.
+-- May contain stale (duplicate) entries for the same tile — these are caught
+-- by the `closed` set on pop (lazy deletion pattern).
 local function heapInsert(heap, node)
 	local i = #heap + 1
 	heap[i] = node
@@ -71,12 +74,12 @@ local function heapPop(heap)
 end
 
 -- Pre-allocated neighbour buffer to avoid per-call table creation.
--- Each entry: { nx, nz, h, towardGoal } — reused across calls.
+-- Each entry: { nx, nz, h } — reused across calls.
 local nbBuf = {
-	{ nx=0, nz=0, h=0, towardGoal=0 },
-	{ nx=0, nz=0, h=0, towardGoal=0 },
-	{ nx=0, nz=0, h=0, towardGoal=0 },
-	{ nx=0, nz=0, h=0, towardGoal=0 },
+	{ nx=0, nz=0, h=0 },
+	{ nx=0, nz=0, h=0 },
+	{ nx=0, nz=0, h=0 },
+	{ nx=0, nz=0, h=0 },
 }
 
 local function getNeighbours(cx, cz, goalX, goalZ)
@@ -88,15 +91,6 @@ local function getNeighbours(cx, cz, goalX, goalZ)
 		nb.nx = nx
 		nb.nz = nz
 		nb.h = heuristic(nx, nz, goalX, goalZ)
-		-- towardGoal: positive when this step moves closer on each axis
-		local tg = 0
-		if off[1] ~= 0 and (off[1] > 0) == (goalX > cx) then
-			tg += math.abs(goalX - cx)
-		end
-		if off[2] ~= 0 and (off[2] > 0) == (goalZ > cz) then
-			tg += math.abs(goalZ - cz)
-		end
-		nb.towardGoal = tg
 	end
 	return nbBuf, count
 end
@@ -112,11 +106,14 @@ function Pathfinder.FindPath(
 
 	if startX == goalX and startZ == goalZ then return {} end
 
-	local openSet  = {}   -- binary min-heap
+	-- Early exit: unwalkable start or goal tile
+	if not isWalkable(startX, startZ) then return nil end
+	if not isWalkable(goalX, goalZ) then return nil end
+
+	local openSet  = {}   -- binary min-heap (may contain stale entries)
 	local cameFrom = {}   -- nkey → { px, pz }
 	local gScore   = {}   -- nkey → number
-	local inOpen   = {}   -- nkey → true
-	local closed   = {}   -- nkey → true
+	local closed   = {}   -- nkey → true  (expanded set)
 
 	local sk = nkey(startX, startZ)
 	gScore[sk] = 0
@@ -126,7 +123,6 @@ function Pathfinder.FindPath(
 		f = heuristic(startX, startZ, goalX, goalZ),
 		h = heuristic(startX, startZ, goalX, goalZ),
 	})
-	inOpen[sk] = true
 
 	local expanded = 0
 
@@ -134,9 +130,8 @@ function Pathfinder.FindPath(
 		local current = heapPop(openSet)
 		local cx, cz  = current.x, current.z
 		local ck      = nkey(cx, cz)
-		inOpen[ck]    = nil
 
-		-- Skip if already expanded (stale entry in heap)
+		-- Lazy deletion: skip stale entries (already expanded via a better path)
 		if closed[ck] then continue end
 		closed[ck] = true
 		expanded  += 1
@@ -181,14 +176,13 @@ function Pathfinder.FindPath(
 				if tentG < (gScore[nk] or math.huge) then
 					cameFrom[nk] = { px = cx, pz = cz }
 					gScore[nk]   = tentG
-					if not inOpen[nk] then
-						heapInsert(openSet, {
-							x = nx, z = nz,
-							f = tentG + nb.h,
-							h = nb.h,
-						})
-						inOpen[nk] = true
-					end
+					-- Lazy deletion: always insert new entry when g improves.
+					-- Stale entries with worse f are caught by `closed` on pop.
+					heapInsert(openSet, {
+						x = nx, z = nz,
+						f = tentG + nb.h,
+						h = nb.h,
+					})
 				end
 			end
 		end

@@ -32,6 +32,9 @@ local CombatService    = require(script.Parent.Parent.Services.CombatService)
 -- 8. Leaderboard (ModuleScript — must be required to register event handlers)
 local LeaderboardService = require(script.Parent.Leaderboard)
 
+-- 6.5. Shop depends on Loot + Leaderboard (coins)
+local ShopService       = require(script.Parent.Parent.Services.ShopService)
+
 print("[Main] All services loaded.")
 
 -- ─── Death / Respawn ──────────────────────────────────────────────────────────

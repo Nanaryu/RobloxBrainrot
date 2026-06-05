@@ -40,6 +40,7 @@ BrainrotRPG/
     │       ├── EnemyService.lua              ✅  zone-based spawning, leash + return state, town boundary
     │       ├── KillTrackerService.lua        ✅  per-enemy + global kills, "KillTracker_v1" DataStore
     │       ├── LootService.lua               ✅  drop rolls, world items, auto-pickup, inventory, equip/unequip
+    │       ├── ShopService.lua               ✅  NPC shop with rotating stock, coin purchases, 5-min refresh
     │       ├── ZoneService.lua               ✅  zone lookup, safe-zone checks, random tile-in-zone
     │       └── CombatService.lua             ✅
     └── StarterPlayer/
@@ -52,6 +53,7 @@ BrainrotRPG/
             ├── DamageNumbers.client.lua      ✅  floating damage numbers
             ├── InventoryController.client.lua ✅ dynamically generates InvSlot instances
             ├── DeathScreen.client.lua         ✅  death overlay, respawn countdown, invincibility flash
+            ├── ShopClient.lua                 ✅  NPC shop UI controller (template-based, UIScale anim)
             └── TargetingController.lua          ✅  hold-E circle-on-chain auto-snap targeting
     └── StarterGui/
         └── LoadingGui/
@@ -61,12 +63,7 @@ BrainrotRPG/
 **Still needed:**
 ```
 ServerScriptService/Services/
-    ShopService.lua
     DataService.lua           (full inventory/equipment persistence)
-StarterPlayer/StarterPlayerScripts/
-    ShopClient.lua
-StarterGui/
-    ShopGui
 ```
 
 **Cleanup still pending:**
@@ -85,6 +82,181 @@ StarterGui/
 - `Services/` = ModuleScripts (no `.server.` suffix), required by `Main.server.lua`
 - `Core/` = Scripts (`.server.lua`), run automatically
 - `MovementController.lua` has no `.client.` suffix but is a LocalScript via `MovementBootstrap.client.lua`
+
+---
+
+## 🖼️ Roblox GUI Object Reference
+> Quick reference for building UI programmatically in LocalScripts.
+> Roblox GUI objects do NOT exist as files on disk — they are created at runtime via `Instance.new()`.
+
+### Core Hierarchy
+```
+StarterGui
+  └─ ScreenGui              ← top-level container, renders on screen
+       ├─ Frame              ← rectangular container (the "panel")
+       │    ├─ UICorner      ← rounds the corners
+       │    ├─ UIStroke      ← border outline
+       │    ├─ UIListLayout  ← auto-arranges children vertically/horizontally
+       │    ├─ UIGridLayout  ← auto-arranges children in a grid
+       │    ├─ UIPadding     ← inner spacing
+       │    └─ UISizeConstraint ← max/min size
+       ├─ TextLabel          ← non-interactive text display
+       ├─ TextButton         ← clickable text
+       ├─ ImageButton        ← clickable image
+       ├─ ImageLabel         ← non-interactive image display
+       ├─ ScrollingFrame     ← scrollable container (has CanvasSize, ScrollBarThickness)
+       │    └─ (children arranged by UIListLayout/UIGridLayout)
+       └─ BillboardGui       ← attached to 3D part, renders in world space
+            └─ TextLabel / ImageLabel
+```
+
+### Key Properties (most-used)
+| Object | Property | Type | Notes |
+|--------|----------|------|-------|
+| Frame | `Size` | UDim2 | `{scale, offset, scale, offset}` — e.g. `UDim2.new(0, 200, 0, 100)` = 200px × 100px |
+| Frame | `Position` | UDim2 | Anchor point is top-left by default |
+| Frame | `AnchorPoint` | Vector2 | `(0.5, 0.5)` centers the frame at its Position |
+| Frame | `BackgroundColor3` | Color3 | Fill color |
+| Frame | `BackgroundTransparency` | number | 0 = opaque, 1 = invisible |
+| Frame | `BorderSizePixel` | number | Set to 0 when using UIStroke |
+| TextLabel/TextButton | `Text` | string | Display text |
+| TextLabel/TextButton | `TextColor3` | Color3 | Text color |
+| TextLabel/TextButton | `Font` | Enum.Font | `GothamBold`, `Gotham`, `SourceSans` |
+| TextLabel/TextButton | `TextScaled` | boolean | Auto-size text to fit container |
+| TextLabel/TextButton | `TextStrokeTransparency` | number | 0 = full outline, 1 = no outline |
+| TextLabel/TextButton | `TextXAlignment` | Enum | `Left`, `Center`, `Right` |
+| ImageLabel/ImageButton | `Image` | string | `"rbxassetid://123456"` |
+| ImageLabel/ImageButton | `ImageColor3` | Color3 | Tint the image |
+| ImageLabel/ImageButton | `ScaleType` | Enum | `Fit`, `Stretch`, `Tile`, `Crop` |
+| ScrollingFrame | `CanvasSize` | UDim2 | Total scrollable area (set dynamically) |
+| ScrollingFrame | `ScrollBarThickness` | number | 0 = hidden scrollbar |
+| ScrollingFrame | `AutomaticCanvasSize` | Enum.AutomaticSize | `Y` = auto-height from children |
+| BillboardGui | `Size` | UDim2 | Pixel size of the billboard |
+| BillboardGui | `StudsOffset` | Vector3 | Offset from the 3D part |
+| BillboardGui | `AlwaysOnTop` | boolean | Renders above 3D geometry |
+| BillboardGui | `Adornee` | Instance | The Part to attach to |
+
+### Layout Objects
+| Object | Key Properties | Notes |
+|--------|---------------|-------|
+| `UIListLayout` | `FillDirection`, `HorizontalAlignment`, `VerticalAlignment`, `Padding`, `SortOrder` | Arranges children in a line |
+| `UIGridLayout` | `CellSize`, `CellPadding`, `FillDirection`, `HorizontalAlignment` | Grid arrangement |
+| `UIPadding` | `PaddingTop`, `PaddingBottom`, `PaddingLeft`, `PaddingRight` | UDim values (scale + offset) |
+| `UICorner` | `CornerRadius` | UDim — `UDim.new(0, 8)` = 8px radius |
+| `UIStroke` | `Color`, `Thickness`, `Transparency` | Border outline |
+| `UISizeConstraint` | `MaxSize`, `MinSize` | Constrains parent size |
+| `UITextSizeConstraint` | `MaxTextSize`, `MinTextSize` | Constrains TextScaled range |
+
+### Creating Objects (Lua pattern)
+```lua
+-- Standard panel pattern used throughout this project:
+local frame = Instance.new("Frame")
+frame.Name = "ShopPanel"
+frame.Size = UDim2.new(0, 400, 0, 300)
+frame.Position = UDim2.new(0.5, 0, 0.5, 0)  -- center screen
+frame.AnchorPoint = Vector2.new(0.5, 0.5)
+frame.BackgroundColor3 = Color3.fromRGB(18, 18, 28)
+frame.BorderSizePixel = 0
+frame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = frame
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(60, 60, 80)
+stroke.Thickness = 1
+stroke.Transparency = 0.4
+stroke.Parent = frame
+```
+
+### UDim2 Cheat Sheet
+```lua
+UDim2.new(scaleX, offsetX, scaleY, offsetY)
+-- scaleX: fraction of parent (0.5 = 50% of parent width)
+-- offsetX: absolute pixels added after scale
+-- Examples:
+UDim2.new(1, 0, 1, 0)       -- fill parent exactly
+UDim2.new(0, 200, 0, 100)    -- fixed 200×100 pixels
+UDim2.new(0.5, 0, 0, 50)     -- 50% parent width, 50px tall
+UDim2.new(1, -20, 1, -20)    -- fill parent minus 20px padding each side
+```
+
+### Tweening (animations)
+```lua
+local TweenService = game:GetService("TweenService")
+local info = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local tween = TweenService:Create(frame, info, { Size = UDim2.new(0, 300, 0, 200) })
+tween:Play()
+-- EasingStyle: Linear, Quad, Cubic, Back, Bounce, Elastic
+-- EasingDirection: Out, In, InOut
+```
+
+### ZIndex / Rendering Order
+- `ZIndex` on individual objects (1–1000, higher = renders on top)
+- `DisplayOrder` on ScreenGui (higher = renders above other ScreenGuis)
+- `GuiObject.Archivable` — set false to exclude from recording/saves
+- `IgnoreGuiInset = true` on ScreenGui lets it cover the top bar
+
+### Common Patterns in This Project
+- **TooltipGui**: separate ScreenGui with `DisplayOrder = 99` so it renders above inventory
+- **InvSlot template**: Frame with `ItemIcon` (ImageLabel) + `ItemLabel` (TextLabel) children
+- **Rarity strokes**: `UIStroke.Color` set from `Config.RARITIES[rarity].color`
+- **Placeholder icons**: `rbxassetid://101140058690765`
+- **Fonts**: `Enum.Font.GothamBold` for all text
+- **All UI built programmatically** in LocalScripts (no Studio GUI editors)
+
+### Project GUI Hierarchy (from Studio export)
+> Exact structure of all existing GUI objects. New panels MUST match this pattern.
+
+```
+StarterGui
+  └─ MainGui (ScreenGui, ZIndexBehavior=Sibling)
+       ├─ LeftPanel (ScreenGui)
+       │    ├─ UIGridLayout (2×2, CellSize=80×80, Padding=20, VerticalAlignment=Center)
+       │    ├─ StoreButton (TextButton, LayoutOrder=1)
+       │    │    ├─ Frame + UIGradient (red→white, rot=45) + UICorner + UIStroke(thick=2)
+       │    │    ├─ BackgroundTexture (ImageLabel, rbxassetid://139594762000290)
+       │    │    ├─ ImageLabel (icon, rbxassetid://72491857349071)
+       │    │    └─ TextLabel ("Store", LuckiestGuy, 16, white, stroke)
+       │    ├─ IndexButton (LayoutOrder=2, blue gradient)
+       │    │    └─ icon: rbxassetid://113643318652668, text: "Index"
+       │    ├─ InventoryButton (LayoutOrder=3, brown/gold gradient)
+       │    │    └─ icon: rbxassetid://101140058690765, text: "Inventory"
+       │    ├─ UpgradesButton (LayoutOrder=4, green→orange gradient)
+       │    │    └─ icon: rbxassetid://128726239575400, text: "Upgrades"
+       │    └─ UIPadding (PaddingLeft=0.01)
+       ├─ TopPanel (ScreenGui)
+       │    ├─ UIListLayout (HorizontalAlignment=Center)
+       │    ├─ XPProgressBar (Frame, 20% width, 2% height, Position=0.343,0.035)
+       │    │    └─ UICorner (radius=3)
+       │    └─ CurrentLevel (TextLabel, "Level 0", LuckiestGuy)
+       ├─ StorePanel (ScreenGui, Enabled=false)
+       │    ├─ StoreContainer (Frame, 639×354, Position=0.274,0.314)
+       │    │    ├─ UICorner + UIStroke_Outer(thick=2) + UIStroke_Inner(Color=red)
+       │    │    ├─ ScrollingFrame (96% width, 85% height, pos=0.02,0.1)
+       │    │    └─ ExitButton (red X, top-right corner, rot=-2)
+       │    ├─ StoreIcon (ImageLabel, 80×80, icon)
+       │    └─ TextLabel ("Store!", LuckiestGuy, 35, rot=2)
+       ├─ IndexPanel (same structure, UIStroke_Inner=blue)
+       ├─ InventoryPanel (same structure, UIStroke_Inner=gold)
+       │    ├─ ScrollingFrame_2
+       │    │    └─ UIGridLayout_2 (CellSize=80×80, Padding=15×5, Center)
+       │    └─ InvSlot (template, Visible=false)
+       │         ├─ UICorner(3) + UIStroke(Color=0.584)
+       │         ├─ ItemIcon (ImageLabel, 70% size, offset 15%,11%)
+       │         └─ ItemLabel (TextLabel, LuckiestGuy, 14, bottom, TextTruncate=AtEnd)
+       └─ UpgradesPanel (same structure, UIStroke_Inner=green)
+```
+
+**Panel conventions:**
+- All content panels: 639×354px, Position=0.274,0.314 (centered-ish)
+- Container has double stroke: `UIStroke_Outer` (default color) + `UIStroke_Inner` (theme color)
+- Each panel has an `ExitButton` (red X, top-right, rot=-2) wired to close
+- Panels open/close via UIScale tween (0→1, Back easing, 0.35s)
+- Button hover: UIScale 1→1.1 (Back, 0.3s) + icon rotation ±12°
+- Button sounds: UIClickSound (rbxassetid://115942274494895), UIHoverSound (rbxassetid://119354387183704)
+- **Theme colors per panel:** Store=red(1,0,0.016), Index=blue(0,0.733,1), Inventory=gold(0.714,0.463,0.11), Upgrades=green(0.392,0.835,0)
 
 ---
 
@@ -217,6 +389,18 @@ StarterGui/
 - Auto-pickup on exact tile (Manhattan == 0); **killer-locked** — only the player who killed the enemy can pick up the drop
 - In-memory `inventories[userId]`; `GetInventory` RemoteFunction wired
 - Elite star count bumps item rarity tier on drop
+- `LootService.GiveItem(player, item)` public method for shop item delivery
+
+### ✅ NPC Shop (ShopService.lua + ShopClient.lua)
+- Global rotating stock of 12 items, refreshed every 5 minutes
+- Items rolled from `ItemData._byRarity` weighted by rarity (500 Common → 1 Secret)
+- Price formula: `floor(stat × PRICE_BASE(5) × rarityMultiplier)` — Common×1, Rare×2, VeryRare×4, Epic×8, Legendary×16, Mythic×32, Secret×64
+- `GetShopList` RemoteFunction returns current stock; `BuyShopItem` RemoteEvent deducts coins via `Leaderboard.AddCoins(-price)` and gives item via `LootService.GiveItem`
+- `ShopListUpdated` broadcasts to all players on buy or refresh
+- Coin validation: `Leaderboard.GetCoins(player)` checked before purchase
+- Lazy-loads Leaderboard and LootService dependencies to avoid circular requires
+- **ShopClient.lua**: LocalScript in StarterPlayerScripts. Finds `ShopPanel` (ScreenGui) inside `MainGui`, clones `ShopSlot` template for each listing. Tooltip via dedicated `ShopTooltipGui` (DisplayOrder=100). UIScale open/close animation matching other panels. Keyboard shortcut: **B** to toggle. Exposes `openShop()`/`closeShop()`/`isOpen()` module.
+- **LeftPanel wiring**: StoreButton click should call `require(player.PlayerScripts:WaitForChild("ShopClient")).openShop()`. The ShopPanel ScreenGui must exist in Studio as a child of MainGui with: `ShopContainer` Frame (639×354), `ShopSlot` template inside `ScrollingFrame`, `UIScale` child, `ExitButton` (red X).
 
 ### ✅ Inventory UI (InventoryController.client.lua)
 - Listens to `InventoryUpdated` + `EquipmentUpdated` remotes; calls `GetInventory` + `GetEquipment` RemoteFunctions on spawn
@@ -282,6 +466,9 @@ StarterGui/
 | GetInventory | C→S fn | → inventory |
 | GetEquipment | C→S fn | → equipment table |
 | GetNearbyShops | C→S fn | → shop list |
+| GetShopList | C→S fn | → NPC shop stock |
+| BuyShopItem | C→S | listingIndex |
+| ShopListUpdated | S→C | stockData |
 
 ---
 
@@ -354,6 +541,7 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - [x] Enemy level display in overhead UI (computed from defense * 0.6)
 - [x] Proper XP-based level progression (Leaderboard stores totalXP, computes level)
 - [x] Item equip system + player stat scaling
+- [x] NPC shop (coin-based rotating stock, 5-min refresh)
 - [ ] Item reroll UI
 - [ ] Full DataStore persistence (inventory, equipment)
 - [ ] NPC shop (premium currency)
@@ -384,7 +572,7 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 - Loot drop chain: `EnemyService._Kill` → `KillTrackerService.RegisterKill` + `LootService.Drop` → world Part → pickup loop → `InventoryUpdated`
 - `ItemData._byRarity[rarityName]` pre-built array for fast random picks
 - Inventory slot template children must be named `ItemIcon` (ImageLabel) and `ItemLabel` (TextLabel)
-- Main.server.lua boot order: TileGrid → Movement → Skills → Enemy → KillTracker → Loot → Combat
+- Main.server.lua boot order: TileGrid → Movement → Skills → Enemy → KillTracker → Loot → Combat → Leaderboard → Shop
 - **Unified movement sequence**: All movement (click-to-move via `playerMoveSeq`, walk-to-enemy via `CancelMovement`, death, StopAttack) uses ONE counter in MovementService. `walkToEnemy` calls `CancelMovement` which increments `playerMoveSeq`, invalidating both click-to-move and previous walk-to-enemy delayed tasks. This prevents `playerTiles` corruption from concurrent movement systems.
 - **Dynamic chase system**: `startChase` replaces static `walkToEnemy`. Uses time-based client position estimation (`estimatePlayerTile`) — tracks when the last path was sent and the player's speed, then calculates how many steps the client has completed via `floor(elapsed / speed)`. Range check and pathfinding both use the estimated position, not the stale server tile. Re-evaluates every 0.2s (`REVAL_INTERVAL`).
 - **Forward declaration pattern**: `startChase` uses `local startChase` forward declaration to resolve circular runtime dependency with `doAttackTick` (which calls `startChase` inside `task.defer`). In Lua, upvalues capture the variable, not the value — so the deferred callback sees the assigned function by call time.
