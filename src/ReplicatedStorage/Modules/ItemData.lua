@@ -51,7 +51,7 @@ ItemData["Noobini Stick"]         = item("Noobini Stick",         "weapon", "atk
 ItemData["Lirili Branch"]         = item("Lirili Branch",         "weapon", "atk", "Rare",      20,  23)
 ItemData["Trippi Blade"]          = item("Trippi Blade",          "weapon", "atk", "Rare",      22,  26)
 ItemData["Cappuccino Dagger"]     = item("Cappuccino Dagger",     "weapon", "atk", "VeryRare",  27,  31)
-ItemData["Brr Brr Fang"]         = item("Brr Brr Fang",         "weapon", "atk", "Epic",      35,  39)
+ItemData["Brr Brr Fang"]          = item("Brr Brr Fang",         "weapon", "atk", "Epic",      35,  39)
 ItemData["Assassino Blade"]       = item("Assassino Blade",       "weapon", "atk", "Epic",      37,  44)
 ItemData["Bombardiro Cannon"]     = item("Bombardiro Cannon",     "weapon", "atk", "Legendary", 45,  51)
 ItemData["Sigma Sword"]           = item("Sigma Sword",           "weapon", "atk", "Legendary", 49,  56)
@@ -73,7 +73,7 @@ ItemData["Racooni Hood"]          = item("Racooni Hood",         "helmet", "def"
 ItemData["Cactus Helm"]           = item("Cactus Helm",          "helmet", "def", "VeryRare",  10,  15)
 ItemData["Penguin Crown"]         = item("Penguin Crown",        "helmet", "def", "Epic",      22,  32)
 ItemData["Chimpazini Crown"]      = item("Chimpazini Crown",     "helmet", "def", "Legendary", 44,  62)
-ItemData["Elefanto Tusk Helm"]    = item("Elefanto Tusk Helm",   "helmet", "def", "Mythic",    80, 115)
+ItemData["Elefanto Tusask Helm"]    = item("Elefanto Tusk Helm",   "helmet", "def", "Mythic",    80, 115)
 ItemData["Girafa Celestial Helm"] = item("Girafa Celestial Helm","helmet", "def", "Secret",   150, 215)
 
 -- ─── Chest ────────────────────────────────────────────────────────────────────
