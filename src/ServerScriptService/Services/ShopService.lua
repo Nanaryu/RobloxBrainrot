@@ -152,9 +152,11 @@ end
 
 function ShopService.BuyItem(player: Player, listingId: number): boolean
 	local listing = nil
-	for _, s in ipairs(stock) do
+	local listingIndex = nil
+	for i, s in ipairs(stock) do
 		if s.id == listingId then
 			listing = s
+			listingIndex = i
 			break
 		end
 	end

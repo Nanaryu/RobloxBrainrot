@@ -17,25 +17,16 @@ local BuyShopItem     = Remotes:WaitForChild("BuyShopItem")
 local ShopListUpdated = Remotes:WaitForChild("ShopListUpdated")
 local GetShopList     = Remotes:WaitForChild("GetShopList")
 
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+
 -- ─── Constants ───────────────────────────────────────────────────────────────
 local FADE_IN  = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local FADE_OUT = TweenInfo.new(0.1,  Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
 local PLACEHOLDER_ICON = "rbxassetid://101140058690765"
 
-local RARITY_COLOR = {
-	Common    = Color3.fromRGB(180, 180, 180),
-	Rare      = Color3.fromRGB( 80, 120, 255),
-	VeryRare  = Color3.fromRGB( 50, 200, 180),
-	Epic      = Color3.fromRGB(163,  53, 238),
-	Legendary = Color3.fromRGB(255, 165,   0),
-	Mythic    = Color3.fromRGB(220,  20,  60),
-	Secret    = Color3.fromRGB(255, 215,   0),
-}
-
-local RARITY_ORDER = {
-	Common=1, Rare=2, VeryRare=3, Epic=4, Legendary=5, Mythic=6, Secret=7,
-}
+local RARITY_COLOR = Config.RARITY_COLOR
+local RARITY_ORDER = Config.RARITY_ORDER
 
 -- ─── State ───────────────────────────────────────────────────────────────────
 local shopPanel    = nil

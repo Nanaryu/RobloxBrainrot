@@ -83,10 +83,6 @@ local function isPlayerAlive(player: Player): boolean
 	return humanoid ~= nil and humanoid.Health > 0
 end
 
-local function manhattan(ax, az, bx, bz): number
-	return math.abs(ax - bx) + math.abs(az - bz)
-end
-
 -- Increment token to invalidate the current attack loop (it will exit on its
 -- next iteration / after its current wait).
 local function stopLoop(player: Player)
@@ -145,7 +141,7 @@ local function doAttackTick(player: Player)
 	local etz = targetModel:GetAttribute("CurrentTileZ")
 	if not etx or not etz then return end
 
-	local dist = manhattan(ptx, ptz, etx, etz)
+	local dist = Config.manhattan(ptx, ptz, etx, etz)
 
 	-- Out of range — stop attacking and re-chase
 	if dist > Config.AUTO_ATTACK_RANGE then
@@ -303,7 +299,7 @@ startChase = function(player, targetModel)
 			if not eptx then break end
 
 			-- Already in attack range → stop chasing, start attacking
-			if manhattan(eptx, eptz, etx, etz) <= Config.AUTO_ATTACK_RANGE then
+			if Config.manhattan(eptx, eptz, etx, etz) <= Config.AUTO_ATTACK_RANGE then
 				startLoop(player)
 				break
 			end
@@ -416,7 +412,7 @@ RequestAttack.OnServerEvent:Connect(function(player: Player, enemyId: string)
 	local etx = model:GetAttribute("CurrentTileX")
 	local etz = model:GetAttribute("CurrentTileZ")
 
-	if ptx and etx and manhattan(ptx, ptz, etx, etz) <= Config.AUTO_ATTACK_RANGE then
+	if ptx and etx and Config.manhattan(ptx, ptz, etx, etz) <= Config.AUTO_ATTACK_RANGE then
 		startLoop(player)
 	else
 		startChase(player, model)
@@ -465,19 +461,8 @@ Players.PlayerRemoving:Connect(function(player: Player)
 	lastAttack[userId] = nil
 end)
 
--- ─── Ensure remotes exist ─────────────────────────────────────────────────────
-local function ensureRemote(name: string, isFunction: boolean)
-	local folder = ReplicatedStorage:WaitForChild("Remotes")
-	if not folder:FindFirstChild(name) then
-		local r  = Instance.new(isFunction and "RemoteFunction" or "RemoteEvent")
-		r.Name   = name
-		r.Parent = folder
-	end
-end
-ensureRemote("AttackResult",  false)
-ensureRemote("RequestAttack", false)
-ensureRemote("StopAttack",    false)
-ensureRemote("DamageNumber",  false)
-
 print("[CombatService] Ready — click-to-attack with walk-to-enemy active.")
-return {}
+return {
+	CalculateDamage = calculateDamage,
+	StopLoop        = stopLoop,
+}

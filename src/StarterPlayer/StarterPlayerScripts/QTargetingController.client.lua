@@ -1,4 +1,4 @@
--- StarterPlayer/StarterPlayerScripts/TargetingController.client.lua
+-- StarterPlayer/StarterPlayerScripts/QTargetingController.client.lua
 -- Hold Q to enter chain-target mode.
 --   ROAMING : small orb on a chain follows the mouse.
 --   SNAPPED : chain hides, rotating arc-segment ring appears flat on the
@@ -56,6 +56,12 @@ local orbWorldPos    = Vector3.zero
 local orbVisualPos   = Vector3.zero
 local ringAngle      = 0
 local ringAngleInner = 0
+
+-- ── Locked ring (persists after Q release) ────────────────────────────────────
+local lockedRingActive = false
+local lockedRingEnemy  = nil
+local lockedRingId     = nil
+local lockedRingConn   = nil
 
 -- ── Visual handles ────────────────────────────────────────────────────────────
 local vFolder      = nil
@@ -209,6 +215,42 @@ local function destroyVisuals()
 	end
 end
 
+-- ── Locked ring (persists after Q release until target dies / combat cancelled)
+local function stopLockedRing()
+	if not lockedRingActive then return end
+	lockedRingActive = false
+	if lockedRingConn then lockedRingConn:Disconnect(); lockedRingConn = nil end
+	lockedRingEnemy = nil
+	lockedRingId    = nil
+	destroyVisuals()
+end
+
+local function startLockedRing(enemy, enemyId)
+	stopLockedRing()
+	lockedRingActive = true
+	lockedRingEnemy  = enemy
+	lockedRingId     = enemyId
+
+	setRingVisible(true)
+	setOrbVisible(false)
+	setChainVisible(false)
+
+	lockedRingConn = RunService.RenderStepped:Connect(function(dt)
+		if not lockedRingActive then return end
+		if not lockedRingEnemy or not lockedRingEnemy.Parent then
+			stopLockedRing(); return
+		end
+		if lockedRingEnemy:GetAttribute("State") == "dead" then
+			stopLockedRing(); return
+		end
+		local enemyPos = lockedRingEnemy:GetPivot().Position
+		local centrePos = Vector3.new(enemyPos.X, Config.TILE_HEIGHT, enemyPos.Z)
+		updateRing(centrePos, dt)
+		if orbPart  then orbPart.CFrame  = CFrame.new(enemyPos) end
+		if orbShell then orbShell.CFrame = CFrame.new(enemyPos) end
+	end)
+end
+
 -- ── Visibility helpers ────────────────────────────────────────────────────────
 local function setRingVisible(v)
 	for _,a in ipairs(outerArcs) do a.Transparency = v and 0.05 or 1 end
@@ -230,6 +272,16 @@ local function triggerSnap()
 	setOrbVisible(false)
 	setChainVisible(false)
 	setRingVisible(true)
+
+	-- Rotate player to face the snapped enemy
+	local hrp = getHRP()
+	if hrp and snappedEnemy then
+		local ePos = snappedEnemy:GetPivot().Position
+		local dir  = (ePos - hrp.Position) * Vector3.new(1, 0, 1)
+		if dir.Magnitude > 0.01 then
+			hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + dir.Unit)
+		end
+	end
 
 	-- Scale-bounce the arcs in
 	for _,a in ipairs(outerArcs) do
@@ -380,13 +432,16 @@ local function startUpdate()
 		-- Snap check
 		local nearEnemy, nearId = findNearestEnemy(orbWorldPos)
 		local newSnap = nearEnemy ~= nil
+
+		-- Set snapped state BEFORE trigger snap/unsnap so callbacks can read it
+		snappedEnemy   = nearEnemy
+		snappedEnemyId = nearId
+		isSnapped      = newSnap
+
 		if newSnap ~= wasSnapped then
 			if newSnap then triggerSnap() else triggerUnsnap() end
 		end
-		wasSnapped     = newSnap
-		isSnapped      = newSnap
-		snappedEnemy   = nearEnemy
-		snappedEnemyId = nearId
+		wasSnapped = newSnap
 
 		if not isSnapped then
 			-- Roaming: orb + chain
@@ -440,6 +495,7 @@ end
 local function activate()
 	if active then return end
 	if not isAlive() then return end
+	stopLockedRing()   -- clean up any previous lock-on
 	active=true; isSnapped=false; wasSnapped=false
 	snappedEnemy=nil; snappedEnemyId=nil
 	ringAngle=0; ringAngleInner=0
@@ -456,11 +512,16 @@ local function deactivate()
 	if not active then return end
 	active = false
 	stopUpdate()
+
 	if isSnapped and snappedEnemyId then
+		-- Keep the ring under the enemy; start persistent lock-on visuals
+		startLockedRing(snappedEnemy, snappedEnemyId)
 		RequestAttack:FireServer(snappedEnemyId)
+	else
+		destroyVisuals()
 	end
+
 	isSnapped=false; wasSnapped=false; snappedEnemy=nil; snappedEnemyId=nil
-	destroyVisuals()
 end
 
 -- ── Input ─────────────────────────────────────────────────────────────────────
@@ -476,11 +537,25 @@ end)
 -- ── Respawn cleanup ───────────────────────────────────────────────────────────
 player.CharacterAdded:Connect(function()
 	active=false; stopUpdate(); destroyVisuals()
+	stopLockedRing()
 	isSnapped=false; wasSnapped=false; snappedEnemy=nil; snappedEnemyId=nil
+end)
+
+-- ── Combat cancelled by movement ──────────────────────────────────────────────
+player:GetAttributeChangedSignal("CombatCancelled"):Connect(function()
+	if player:GetAttribute("CombatCancelled") then
+		stopLockedRing()
+		if active then
+			active = false
+			stopUpdate()
+			isSnapped=false; wasSnapped=false; snappedEnemy=nil; snappedEnemyId=nil
+		end
+	end
 end)
 
 -- ── Public API ────────────────────────────────────────────────────────────────
 local M = {}
 function M.IsActive()          return active          end
 function M.GetSnappedEnemyId() return snappedEnemyId  end
+function M.StopLockedRing()    stopLockedRing()       end
 return M

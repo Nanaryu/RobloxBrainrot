@@ -19,8 +19,8 @@ ZoneData.ZONES = {
 		noiseAmp    = 0.15,                     -- light organic wobble on edges
 		safe        = true,                     -- no enemy spawns, enemies blocked
 		tileColors  = {
-			primary   = Color3.fromRGB(180, 160, 100),  -- warm sandstone
-			secondary = Color3.fromRGB(160, 145, 90),
+			primary   = Color3.fromRGB(240, 210, 120),  -- warm golden town
+			secondary = Color3.fromRGB(220, 195, 110),
 		},
 		tileMaterial = Enum.Material.SmoothPlastic,
 		leashRange  = 0,
@@ -35,8 +35,8 @@ ZoneData.ZONES = {
 		noiseAmp    = 0.30,
 		safe        = false,
 		tileColors  = {
-			primary   = Color3.fromRGB(80, 120, 60),   -- grass green
-			secondary = Color3.fromRGB(70, 110, 55),
+			primary   = Color3.fromRGB(100, 200, 70),   -- vivid green
+			secondary = Color3.fromRGB(85, 185, 60),
 		},
 		tileMaterial = Enum.Material.Grass,
 		spawnDensity = 0.012,
@@ -51,8 +51,8 @@ ZoneData.ZONES = {
 		noiseAmp    = 0.30,
 		safe        = false,
 		tileColors  = {
-			primary   = Color3.fromRGB(194, 170, 110), -- sand
-			secondary = Color3.fromRGB(180, 158, 100),
+			primary   = Color3.fromRGB(230, 190, 100), -- bright golden sand
+			secondary = Color3.fromRGB(210, 175, 90),
 		},
 		tileMaterial = Enum.Material.Sand,
 		spawnDensity = 0.012,
@@ -67,8 +67,8 @@ ZoneData.ZONES = {
 		noiseAmp    = 0.28,
 		safe        = false,
 		tileColors  = {
-			primary   = Color3.fromRGB(55, 80, 50),    -- dark moss
-			secondary = Color3.fromRGB(45, 70, 42),
+			primary   = Color3.fromRGB(50, 160, 140),    -- vibrant teal
+			secondary = Color3.fromRGB(40, 140, 125),
 		},
 		tileMaterial = Enum.Material.Mud,
 		spawnDensity = 0.012,
@@ -83,8 +83,8 @@ ZoneData.ZONES = {
 		noiseAmp    = 0.30,
 		safe        = false,
 		tileColors  = {
-			primary   = Color3.fromRGB(50, 30, 25),    -- dark basalt
-			secondary = Color3.fromRGB(60, 35, 28),
+			primary   = Color3.fromRGB(200, 60, 50),    -- bright volcanic red
+			secondary = Color3.fromRGB(180, 50, 45),
 		},
 		tileMaterial = Enum.Material.Slate,
 		spawnDensity = 0.012,

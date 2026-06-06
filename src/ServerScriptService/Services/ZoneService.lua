@@ -24,20 +24,6 @@ function ZoneService.GetZoneAt(tx: number, tz: number)
 	return nil
 end
 
-function ZoneService.GetZoneIdAt(tx: number, tz: number)
-	ensureTileGrid()
-	return TileGrid.GetZone(tx, tz)
-end
-
-function ZoneService.IsSafeZone(tx: number, tz: number): boolean
-	ensureTileGrid()
-	local tile = TileGrid.GetTile(tx, tz)
-	if tile then
-		return tile:GetAttribute("Safe") == true
-	end
-	return false
-end
-
 -- Pick a random walkable tile inside a zone using blob geometry.
 function ZoneService.GetRandomTileInZone(zoneId: string, attempts: number?): (number?, number?)
 	ensureTileGrid()
@@ -76,15 +62,6 @@ function ZoneService.GetRandomTileInZone(zoneId: string, attempts: number?): (nu
 	end
 
 	return nil, nil
-end
-
-function ZoneService.GetSpawnZoneId(): string
-	return "Town"
-end
-
-function ZoneService.IsWalkable(tx: number, tz: number): boolean
-	ensureTileGrid()
-	return TileGrid.IsWalkable(tx, tz)
 end
 
 print("[ZoneService] Ready.")

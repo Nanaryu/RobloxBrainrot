@@ -54,7 +54,8 @@ BrainrotRPG/
             ├── InventoryController.client.lua ✅ dynamically generates InvSlot instances
             ├── DeathScreen.client.lua         ✅  death overlay, respawn countdown, invincibility flash
             ├── ShopClient.lua                 ✅  NPC shop UI controller (template-based, UIScale anim)
-            └── TargetingController.lua          ✅  hold-E circle-on-chain auto-snap targeting
+            ├── TargetingController.lua          ✅  hold-E circle-on-chain auto-snap targeting
+            └── QTargetingController.client.lua  ✅  hold-Q orb-on-chain + arc-segment ring targeting
     └── StarterGui/
         └── LoadingGui/
             └── LoadingClient.client.lua      ✅  loading screen with retry logic
@@ -297,18 +298,17 @@ StarterGui
 - `GetZone(tx, tz)` returns zone id string for a tile
 - `SetTileType(tx, tz, "Water")` marks unwalkable + recolors (glass material, 30% transparency)
 - **Decorations** (in `Workspace/Map/Decorations`):
-  - Water pools: 2-4 per zone, 2-3 tile clusters, glass material
-  - Rocks: 12-22 per zone, non-walkable slate tiles
-  - Bushes: 15-30 per zone (not Volcano), green ball parts, no collision
-  - Crystals: 4-10 per zone, neon cylinder parts, slight transparency
-  - Ambient particles: 6 emitters per zone (petals/dust/mist/embers)
+  - Water pools: 2-3 flood-filled blobs per zone (5-10 tiles each), glass material, bright blue
+  - Rocks: 3-5 flood-filled blobs per zone (4-8 tiles each), non-walkable slate tiles, warm stone colors
+  - Bushes: 15-30 per zone (not Volcano), bright green ball parts, no collision
+  - Crystals: 4-10 per zone, neon cylinder parts, vibrant colors (cyan/purple/pink/teal)
+  - Ambient particles: 6 emitters per zone (lime petals / golden dust / teal mist / bright embers)
 
 ### ✅ Zone System (ZoneService + ZoneData)
 - 5 zones: Town (safe), Grasslands (Tier 1), Desert (Tier 2), Swamp (Tier 3), Volcano (Tier 4)
 - Zones are organic blobs — centre offset + radius + noise amplitude (not concentric rings)
 - Town is a hard safe boundary (`TOWN_RADIUS = 10` tiles) — enemies cannot enter
 - `ZoneService.GetZoneAt(tx, tz)` → zone table or nil (void tile)
-- `ZoneService.IsSafeZone(tx, tz)` — true for Town only
 - `ZoneService.GetRandomTileInZone(zoneId)` — random walkable tile in a zone
 - `ZoneData.BuildSpawnPool(zone)` / `ZoneData.PickEnemy(zone, pool)` — weighted random enemy selection
 - Each zone has `spawnDensity`, `leashRange`, and `spawnEnemies` weighted list
@@ -347,7 +347,7 @@ StarterGui
 - **Zone-based spawning**: enemies fill non-safe zones based on `spawnDensity`; weighted random picks from `ZoneData.spawnEnemies`
 - **Respawn timer**: killed enemies queue respawn in their zone (8–15 s delay)
 - **Combined damage per tick** (Rucoy-style): `queueDamage` adds to per-player accumulator; processor runs every 0.5s summing all damage, applying DEF once, granting DEF XP once
-- `EnemyService.DamageEnemy(id, amount, player)`, `GetEnemy(id)`, `GetEnemyAtTile(tx, tz)`
+- `EnemyService.DamageEnemy(id, amount, player)`, `GetEnemy(id)`
 - `_Kill` calls `KillTrackerService.RegisterKill(killer, enemyName)`, `LootService.Drop(model, killer)`, and `LeaderboardService.AddXP(killer, xp)`
 
 ### ✅ Kill Tracker (KillTrackerService)
@@ -465,7 +465,6 @@ StarterGui
 | EquipmentUpdated | S→C | equipmentTable |
 | GetInventory | C→S fn | → inventory |
 | GetEquipment | C→S fn | → equipment table |
-| GetNearbyShops | C→S fn | → shop list |
 | GetShopList | C→S fn | → NPC shop stock |
 | BuyShopItem | C→S | listingIndex |
 | ShopListUpdated | S→C | stockData |
@@ -552,6 +551,51 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 
 ---
 
+## 🔍 Codebase Audit (2026-06-06)
+
+### 🔴 Bugs Found
+| ID | File | Issue | Status |
+|----|------|-------|--------|
+| B1 | `ShopService.lua:203` | `table.remove(stock, listingIndex)` — `listingIndex` is undefined; should be index from loop | FIXED |
+| B2 | `StarterPlayerScripts/` | Two files named `TargetingController` — `.lua` (ModuleScript) and `.client.lua` (LocalScript). `WaitForChild("TargetingController")` picks first match; `.client.lua` can't be `require()`d | FIXED |
+| B3 | `CombatService.lua:483` | Returns `{}` instead of service table — works by side-effect only, any future method call will silently get nil | FIXED |
+| B4 | `RemotesInit.server.lua` | `GetNearbyShops` remote declared, no `OnServerInvoke` handler — clients hang on `InvokeServer()` | FIXED |
+
+### 🟡 Unused Functions (removed)
+| File | Function | Reason |
+|------|----------|--------|
+| `Leaderboard.lua:75` | `AddKill()` | Empty stub — KillTrackerService owns kills |
+| `Leaderboard.lua:97` | `Format` | Assigned but never referenced |
+| `EnemyService.lua:857` | `GetEnemyAtTile()` | Never called |
+| `EnemyService.lua:873` | `IsCurrentTileOccupied()` | Never called |
+| `MovementService.lua:273` | `IsPlayerTileOccupied()` | Never called (internal `isPlayerTileOccupied` used instead) |
+| `CombatController.client.lua:277` | `IsAttackMode()` | Never called |
+| `TargetingController.lua:643` | `GetTarget()` | Never called |
+| `TargetingController.lua:658` | `UpdateArcPosition()` | Never called |
+| `TargetingController.lua:662` | `SetArcColor()` | Never called |
+| `ZoneService.lua:27` | `GetZoneIdAt()` | Never called (code uses `GetZoneAt`) |
+| `ZoneService.lua:32` | `IsSafeZone()` | Never called |
+| `ZoneService.lua:81` | `GetSpawnZoneId()` | Never called |
+| `ZoneService.lua:85` | `IsWalkable()` | Never called (code calls `TileGrid.IsWalkable` directly) |
+
+### 🟡 Unused Remotes (removed)
+| Remote | Location | Issue |
+|--------|----------|-------|
+| `GetNearbyShops` | `RemotesInit.server.lua:50` | No handler — removed |
+| `RerollRequest` | `RemotesInit.server.lua:39` | Not wired — kept (planned feature) |
+| `RerollResult` | `RemotesInit.server.lua:40` | Not fired — kept (planned feature) |
+
+### 🟢 Duplicated Code (consolidated)
+| Pattern | Files | Action |
+|---------|-------|--------|
+| `manhattan()` | `EnemyService.lua`, `CombatService.lua` | Moved to `Config.manhattan()` — both now reference Config |
+| `getEnemyFromPart()` | `MovementController.lua`, `CombatController.client.lua` | Moved to `Config.getEnemyFromPart()` — both now reference Config |
+| `RARITY_COLOR` / `RARITY_ORDER` | `InventoryController`, `ShopClient`, `LootService`, `EnemyService` | Moved to `Config.RARITY_COLOR` / `Config.RARITY_ORDER` — all consumers reference Config |
+| `EQUIP_SLOTS` | `InventoryController.client.lua`, `LootService.lua` | Moved to `Config.EQUIP_SLOTS` — both reference Config |
+| `ensureRemote()` | `CombatService.lua` | Removed redundant calls — remotes already created by `RemotesInit` |
+
+---
+
 ## 📝 Open Decisions
 - [ ] Game name
 - [ ] Item slots (sword, staff, shield, helmet, chest, legs, boots?)
@@ -562,6 +606,7 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 ---
 
 ## 🔑 Key Implementation Notes
+- **Config.lua is the canonical source** for: `RARITY_COLOR`, `RARITY_ORDER`, `EQUIP_SLOTS`, `manhattan()`, `getEnemyFromPart()`. All modules reference Config — no local copies.
 - **Kill tracking ownership**: KillTrackerService is sole owner of kill counts. Leaderboard.lua does NOT write `Kills.Value` in `refreshDisplay` or save it in `PlayerRemoving`. KillTracker sets `leaderstats.Kills.Value` via `WaitForChild` after load to win the race condition.
 - **DataStores in use**: `"Stats"` (Level, Coins via Leaderboard), `"KillTracker_v1"` (kills via KillTrackerService), `"Skills_v1"` (Attack/Defense XP via SkillService), `"Inventory_v1"` (inventory via LootService) — all saved on PlayerRemoving + BindToClose only (batched, no per-kill writes)
 - Enemy defense reduction: flat subtraction — `max(1, enemy_damage - DEF_Level)`

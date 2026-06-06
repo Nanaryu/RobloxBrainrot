@@ -13,6 +13,8 @@ local TileGridService = {}
 local tileGridFolder: Folder
 local tileMap: { [number]: { [number]: BasePart } } = {}
 
+local WATER_COLOR = Color3.fromRGB(60, 160, 240)  -- bright blue
+
 -- ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function TileGridService.TileToWorld(tx: number, tz: number): Vector3
@@ -55,9 +57,9 @@ function TileGridService.SetTileType(tx: number, tz: number, tileType: string)
 	tile:SetAttribute("TileType", tileType)
 	tile:SetAttribute("Walkable", tileType ~= "Water")
 	if tileType == "Water" then
-		tile.Color = Color3.fromRGB(45, 105, 165)
+		tile.Color = WATER_COLOR
 		tile.Material = Enum.Material.Glass
-		tile.Transparency = 0.3
+		tile.Transparency = 0.25
 	end
 	return true
 end
@@ -170,22 +172,22 @@ end
 local decorFolder: Folder
 
 local ROCK_COLORS = {
-	Color3.fromRGB(90, 85, 75),
-	Color3.fromRGB(70, 68, 60),
-	Color3.fromRGB(100, 95, 85),
+	Color3.fromRGB(120, 115, 105),  -- warm stone
+	Color3.fromRGB(100, 95, 85),    -- medium stone
+	Color3.fromRGB(140, 130, 115),  -- light stone
 }
 
 local BUSH_COLORS = {
-	Color3.fromRGB(50, 100, 45),
-	Color3.fromRGB(40, 90, 38),
-	Color3.fromRGB(60, 110, 50),
+	Color3.fromRGB(70, 180, 60),    -- bright green
+	Color3.fromRGB(60, 160, 50),    -- vivid green
+	Color3.fromRGB(80, 200, 65),    -- lime green
 }
 
 local CRYSTAL_COLORS = {
-	Color3.fromRGB(100, 180, 255),
-	Color3.fromRGB(180, 100, 255),
-	Color3.fromRGB(255, 100, 180),
-	Color3.fromRGB(100, 255, 180),
+	Color3.fromRGB(100, 200, 255),  -- bright cyan
+	Color3.fromRGB(200, 100, 255),  -- vivid purple
+	Color3.fromRGB(255, 100, 200),  -- hot pink
+	Color3.fromRGB(100, 255, 200),  -- bright teal
 }
 
 local function lerpColor(a: Color3, b: Color3, t: number): Color3
@@ -201,25 +203,39 @@ local function scatterWater(spawnX, spawnZ, zones)
 		if zone.safe then continue end
 		local cx = spawnX + zone.center.x
 		local cz = spawnZ + zone.center.z
-		local poolCount = math.random(2, 4)
+		local poolCount = math.random(2, 3)
 		for _ = 1, poolCount do
 			local angle = math.random() * math.pi * 2
 			local r = math.random(3, math.floor(zone.radius * 0.6))
-			local bx = math.floor(cx + math.cos(angle) * r)
-			local bz = math.floor(cz + math.sin(angle) * r)
-			if TileGridService.IsWalkable(bx, bz) and tileZoneMap[bx] and tileZoneMap[bx][bz] == zone.id then
-				TileGridService.SetTileType(bx, bz, "Water")
-				local spread = math.random(1, 2)
-				for dx = -spread, spread do
-					for dz = -spread, spread do
-						if dx ~= 0 or dz ~= 0 then
-							if math.random() < 0.5 then
-								local nx, nz = bx + dx, bz + dz
-								if TileGridService.IsWalkable(nx, nz)
-									and tileZoneMap[nx] and tileZoneMap[nx][nz] == zone.id then
-									TileGridService.SetTileType(nx, nz, "Water")
-								end
-							end
+			local sx = math.floor(cx + math.cos(angle) * r)
+			local sz = math.floor(cz + math.sin(angle) * r)
+			if not TileGridService.IsWalkable(sx, sz) then continue end
+			if not (tileZoneMap[sx] and tileZoneMap[sx][sz] == zone.id) then continue end
+
+			-- Flood-fill blob from seed
+			local blobSize = math.random(5, 10)
+			local filled = {}
+			local queue = { {sx, sz} }
+			filled[sx .. "," .. sz] = true
+
+			while #queue > 0 and blobSize > 0 do
+				local idx = math.random(1, #queue)
+				local cur = queue[idx]
+				table.remove(queue, idx)
+
+				local tx, tz = cur[1], cur[2]
+				TileGridService.SetTileType(tx, tz, "Water")
+				blobSize -= 1
+
+				local offsets = { {1,0}, {-1,0}, {0,1}, {0,-1}, {1,1}, {-1,1}, {1,-1}, {-1,-1} }
+				for _, off in ipairs(offsets) do
+					local nx, nz = tx + off[1], tz + off[2]
+					local key = nx .. "," .. nz
+					if not filled[key] and math.random() < 0.6 then
+						if TileGridService.IsWalkable(nx, nz)
+							and tileZoneMap[nx] and tileZoneMap[nx][nz] == zone.id then
+							filled[key] = true
+							table.insert(queue, {nx, nz})
 						end
 					end
 				end
@@ -233,20 +249,47 @@ local function scatterRocks(spawnX, spawnZ, zones)
 		if zone.safe then continue end
 		local cx = spawnX + zone.center.x
 		local cz = spawnZ + zone.center.z
-		local count = math.random(12, 22)
-		for _ = 1, count do
+		local blobCount = math.random(3, 5)
+		for _ = 1, blobCount do
 			local angle = math.random() * math.pi * 2
 			local r = math.random(2, math.floor(zone.radius * 0.8))
-			local tx = math.floor(cx + math.cos(angle) * r)
-			local tz = math.floor(cz + math.sin(angle) * r)
-			if TileGridService.IsWalkable(tx, tz)
-				and tileZoneMap[tx] and tileZoneMap[tx][tz] == zone.id then
+			local sx = math.floor(cx + math.cos(angle) * r)
+			local sz = math.floor(cz + math.sin(angle) * r)
+			if not TileGridService.IsWalkable(sx, sz) then continue end
+			if not (tileZoneMap[sx] and tileZoneMap[sx][sz] == zone.id) then continue end
+
+			-- Flood-fill blob from seed
+			local blobSize = math.random(4, 8)
+			local filled = {}
+			local queue = { {sx, sz} }
+			filled[sx .. "," .. sz] = true
+
+			while #queue > 0 and blobSize > 0 do
+				local idx = math.random(1, #queue)
+				local cur = queue[idx]
+				table.remove(queue, idx)
+
+				local tx, tz = cur[1], cur[2]
 				TileGridService.SetTileWalkable(tx, tz, false)
 				local tile = TileGridService.GetTile(tx, tz)
 				if tile then
 					tile.Color = ROCK_COLORS[math.random(1, #ROCK_COLORS)]
 					tile.Material = Enum.Material.Slate
 					tile:SetAttribute("TileType", "Rock")
+				end
+				blobSize -= 1
+
+				local offsets = { {1,0}, {-1,0}, {0,1}, {0,-1}, {1,1}, {-1,1}, {1,-1}, {-1,-1} }
+				for _, off in ipairs(offsets) do
+					local nx, nz = tx + off[1], tz + off[2]
+					local key = nx .. "," .. nz
+					if not filled[key] and math.random() < 0.5 then
+						if TileGridService.IsWalkable(nx, nz)
+							and tileZoneMap[nx] and tileZoneMap[nx][nz] == zone.id then
+							filled[key] = true
+							table.insert(queue, {nx, nz})
+						end
+					end
 				end
 			end
 		end
@@ -322,28 +365,28 @@ end
 
 local ZONE_PARTICLE_CONFIG = {
 	Grasslands = {
-		color = Color3.fromRGB(120, 180, 80),
+		color = Color3.fromRGB(140, 220, 80),  -- bright lime petals
 		rate = 6,
 		lifetime = NumberRange.new(3, 6),
 		speed = NumberRange.new(0.5, 1.5),
 		spread = Vector3.new(12, 0, 12),
 	},
 	Desert = {
-		color = Color3.fromRGB(200, 180, 130),
+		color = Color3.fromRGB(240, 210, 120),  -- golden sand dust
 		rate = 10,
 		lifetime = NumberRange.new(2, 5),
 		speed = NumberRange.new(1, 3),
 		spread = Vector3.new(14, 0, 14),
 	},
 	Swamp = {
-		color = Color3.fromRGB(100, 140, 90),
+		color = Color3.fromRGB(80, 200, 180),  -- teal mist
 		rate = 8,
 		lifetime = NumberRange.new(4, 8),
 		speed = NumberRange.new(0.2, 0.8),
 		spread = Vector3.new(10, 0, 10),
 	},
 	Volcano = {
-		color = Color3.fromRGB(255, 100, 30),
+		color = Color3.fromRGB(255, 80, 40),  -- bright ember
 		rate = 12,
 		lifetime = NumberRange.new(1, 3),
 		speed = NumberRange.new(2, 5),
@@ -441,7 +484,7 @@ function TileGridService.Generate()
 	local gh        = Config.GRID_HEIGHT
 	local zones     = ZoneData.ZONES
 
-	local VOID_COLOR    = Color3.fromRGB(30, 30, 35)
+	local VOID_COLOR    = Color3.fromRGB(45, 42, 55)  -- soft dark purple
 	local VOID_MATERIAL = Enum.Material.Slate
 
 	local tileCount = 0
@@ -496,7 +539,7 @@ function TileGridService.Generate()
 
 				if borderBlend then
 					-- Blend toward a neutral midpoint
-					local neutralColor = Color3.fromRGB(120, 115, 100)
+					local neutralColor = Color3.fromRGB(180, 170, 150)  -- warm light neutral
 					part.Color = lerpColor(zone.tileColors.primary, neutralColor, 0.4)
 					part.Material = Enum.Material.SmoothPlastic
 				else

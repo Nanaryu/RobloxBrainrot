@@ -47,7 +47,6 @@ local EVENTS = {
 local FUNCTIONS = {
 	"GetInventory",       -- Client → Server, returns serialised inventory table
 	"GetEquipment",       -- Client → Server, returns equipped items table
-	"GetNearbyShops",     -- Client → Server, returns nearby shop list table
 	"GetShopList",        -- Client → Server, returns NPC shop stock table
 }
 

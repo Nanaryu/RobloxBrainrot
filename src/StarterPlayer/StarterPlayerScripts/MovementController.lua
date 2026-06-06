@@ -36,6 +36,7 @@ local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
 local RequestMove = Remotes:WaitForChild("RequestMove")
 local PlayerMoved = Remotes:WaitForChild("PlayerMoved")
+local StopAttack  = Remotes:WaitForChild("StopAttack")
 
 local player = Players.LocalPlayer
 
@@ -326,16 +327,20 @@ local function animatePath(path)
 	local finalX  = path[#path][1]
 	local finalZ  = path[#path][2]
 
+	-- Force-reset stale walkPlaying from a previous coroutine that hasn't
+	-- called stopWalk() yet (happens on rapid click re-pathing).
+	walkPlaying = false
 	isMoving = true
 	playWalk()   -- start animation ONCE for the whole path
 
 	for _, step in ipairs(path) do
-		if token ~= moveToken then
-			isMoving = false
-			stopWalk()
-			return
-		end
+		if token ~= moveToken then return end
+		-- Claim the tile BEFORE sliding so any concurrent fireMoveRequest
+		-- reports the correct origin to the server (fixes backwards paths).
+		currentTileX = step[1]
+		currentTileZ = step[2]
 		if not moveStep(step[1], step[2], token) then
+			if token ~= moveToken then return end  -- newer coroutine owns state
 			isMoving = false
 			stopWalk()
 			return
@@ -397,6 +402,10 @@ local function requestMove(tx, tz)
 
 	-- Dedup: ignore if it's the same destination we already sent
 	if requestedTileX == tx and requestedTileZ == tz then return end
+
+	-- Cancel any active combat targeting when the player manually moves
+	StopAttack:FireServer()
+	player:SetAttribute("CombatCancelled", true)
 
 	setHighlight(tx, tz)
 	fireMoveRequest(tx, tz)
@@ -505,6 +514,23 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId, enem
 		return
 	end
 
+	-- ── Server-forced snap (mid-path enemy collision stop) ────────────────────
+	-- When the server detects an enemy on the next tile during advanceServerTiles,
+	-- it fires back with path=nil, requestId=0 to snap the client to the last safe tile.
+	-- Must be AFTER the spawn snap (same signal shape) and guarded by spawned.
+	if spawned and path == nil and requestId == 0 then
+		moveToken += 1
+		isMoving    = false
+		if walkPlaying then stopWalk() end
+		currentTileX = tx
+		currentTileZ = tz
+		requestedTileX = nil
+		requestedTileZ = nil
+		clearHighlight()
+		if hrp then hrp.CFrame = CFrame.new(tileToWorld(tx, tz)) end
+		return
+	end
+
 	-- ── Attack-move path (server-driven walk to enemy, requestId == -1) ───────
 	if requestId == -1 and path and #path > 0 then
 		-- Single clean token increment to cancel any in-progress walk
@@ -521,12 +547,11 @@ PlayerMoved.OnClientEvent:Connect(function(userId, tx, tz, path, requestId, enem
 
 		task.spawn(function()
 			for _, step in ipairs(path) do
-				if token ~= moveToken then
-					isMoving = false
-					stopWalk()
-					return
-				end
+				if token ~= moveToken then return end
+				currentTileX = step[1]
+				currentTileZ = step[2]
 				if not moveStep(step[1], step[2], token) then
+					if token ~= moveToken then return end
 					isMoving = false
 					stopWalk()
 					return
@@ -573,15 +598,6 @@ local function isTargetingActive()
 	return TargetingController and TargetingController.IsActive()
 end
 
-local function getEnemyFromPart(part)
-	local obj = part
-	while obj do
-		if obj:IsA("Model") and obj:GetAttribute("EnemyId") then return obj end
-		obj = obj.Parent
-	end
-	return nil
-end
-
 local mouse = player:GetMouse()
 mouse.Button1Down:Connect(function()
 	if not isAlive() then return end
@@ -590,7 +606,7 @@ mouse.Button1Down:Connect(function()
 
 	local target = mouse.Target
 	if not target then return end
-	if getEnemyFromPart(target) then return end
+	if Config.getEnemyFromPart(target) then return end
 
 	local tx, tz = target.Name:match("^Tile_(%d+)_(%d+)$")
 	if tx and tz then

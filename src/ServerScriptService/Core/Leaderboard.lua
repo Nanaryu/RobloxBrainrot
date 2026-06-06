@@ -72,9 +72,6 @@ end
 -- ─── Public helpers (called by other services) ────────────────────────────────
 local Leaderboard = {}
 
-function Leaderboard.AddKill(player: Player, amount: number)
-end
-
 function Leaderboard.AddCoins(player: Player, amount: number)
 	local raw = getRaw(player.UserId)
 	raw.coins += (amount or 0)
@@ -93,8 +90,6 @@ function Leaderboard.AddXP(player: Player, amount: number)
 	raw.totalXP += amount
 	refreshDisplay(player)
 end
-
-Leaderboard.Format = format
 
 -- ─── Player added ─────────────────────────────────────────────────────────────
 Players.PlayerAdded:Connect(function(player)

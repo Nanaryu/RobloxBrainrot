@@ -26,11 +26,6 @@ local inventoryStore = DataStoreService:GetDataStore("Inventory_v1")
 local LootService = {}
 
 -- ─── Equipment slot definitions ────────────────────────────────────────────────
-local EQUIP_SLOTS = {
-	weapon = true, offhand = true,
-	helmet = true, chest  = true,
-	legs   = true, boots  = true,
-}
 local ATK_SLOTS   = { weapon = true, offhand = true }
 local DEF_SLOTS   = { helmet = true, chest = true, legs = true, boots = true }
 
@@ -131,19 +126,10 @@ local function pickTemplate(rarityName: string): string?
 end
 
 -- ─── Rarity tier helpers ──────────────────────────────────────────────────────
-local RARITY_ORDER = {}
-for i, r in ipairs(Config.RARITIES) do
-	RARITY_ORDER[r.name] = i
-end
 local function bumpRarity(rarityName: string, bump: number): string
-	local idx = (RARITY_ORDER[rarityName] or 1) + bump
+	local idx = (Config.RARITY_ORDER[rarityName] or 1) + bump
 	idx = math.clamp(idx, 1, #Config.RARITIES)
 	return Config.RARITIES[idx].name
-end
-
-local RARITY_COLOR = {}
-for _, r in ipairs(Config.RARITIES) do
-	RARITY_COLOR[r.name] = r.color
 end
 
 -- ─── World drop state ─────────────────────────────────────────────────────────
@@ -156,7 +142,7 @@ local worldDrops = {}  -- itemId → { part, item, tileX, tileZ }
 local lootFolder: Folder
 
 local function spawnWorldDrop(item: table, worldPos: Vector3, tx: number, tz: number, killerId: number?)
-	local color = RARITY_COLOR[item.rarity] or Color3.new(1, 1, 1)
+	local color = Config.RARITY_COLOR[item.rarity] or Color3.new(1, 1, 1)
 
 	local part            = Instance.new("Part")
 	part.Name             = "Drop_" .. item.id
@@ -249,7 +235,7 @@ function LootService.EquipItem(player: Player, itemId: string): boolean
 		print("[EquipItem] FAIL: item not in inventory:", itemId)
 		return false
 	end
-	if not EQUIP_SLOTS[item.slot] then
+	if not Config.EQUIP_SLOTS[item.slot] then
 		print("[EquipItem] FAIL: invalid slot:", item.slot, "for item:", itemId)
 		return false
 	end
@@ -279,7 +265,7 @@ end
 
 -- ─── Unequip an item from a slot ──────────────────────────────────────────────
 function LootService.UnequipItem(player: Player, slot: string): boolean
-	if not EQUIP_SLOTS[slot] then
+	if not Config.EQUIP_SLOTS[slot] then
 		print("[UnequipItem] FAIL: invalid slot:", slot)
 		return false
 	end

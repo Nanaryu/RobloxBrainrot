@@ -91,20 +91,20 @@ local function isModelBlockingTile(model: Model, tx: number, tz: number): boolea
 	local movingZ  = model:GetAttribute("MovingToTileZ")
 	return (currentX == tx and currentZ == tz) or (movingX == tx and movingZ == tz)
 end
-local function isPlayerTileOccupied(tx, tz)
+local function isPlayerTileReserved(tx, tz)
 	if not MovementService then
 		MovementService = require(script.Parent.MovementService)
 	end
-	return MovementService.IsPlayerTileOccupied(tx, tz)
+	return MovementService.IsTileReservedForPlayer(tx, tz)
 end
 local function isPassable(tx, tz)
 	return TileGrid.IsWalkable(tx, tz)
 		and not isTileOccupied(tx, tz)
-		and not isPlayerTileOccupied(tx, tz)
+		and not isPlayerTileReserved(tx, tz)
 end
 local function isPassableForEnemy(tx, tz, id)
 	if not TileGrid.IsWalkable(tx, tz) then return false end
-	if isPlayerTileOccupied(tx, tz) then return false end
+	if isPlayerTileReserved(tx, tz) then return false end
 	local zone = TileGrid.GetZone(tx, tz)
 	if zone == "Town" then return false end
 	local occupant = occupiedTiles[tileKey(tx, tz)]
@@ -188,10 +188,6 @@ local function tweenModelPivot(model: Model, targetCF: CFrame, tweenInfo: TweenI
 	pivotValue:Destroy()
 end
 
-local function manhattan(ax, az, bx, bz): number
-	return math.abs(ax - bx) + math.abs(az - bz)
-end
-
 -- ─── Movement helper ──────────────────────────────────────────────────────────
 local function moveEnemyToTile(model, tx, tz)
 	if not model.PrimaryPart then return end
@@ -201,7 +197,7 @@ local function moveEnemyToTile(model, tx, tz)
 	local dx    = tx - fromX
 	local dz    = tz - fromZ
 
-	if isTileOccupiedByOther(tx, tz, id) or isPlayerTileOccupied(tx, tz) then return end
+	if isTileOccupiedByOther(tx, tz, id) or isPlayerTileReserved(tx, tz) then return end
 
 	model:SetAttribute("MovingToTileX", tx)
 	model:SetAttribute("MovingToTileZ", tz)
@@ -250,8 +246,8 @@ end
 
 -- ─── Overhead BillboardGui ────────────────────────────────────────────────────
 local RARITY_COLORS = {}
-for _, r in ipairs(Config.RARITIES) do
-	RARITY_COLORS[r.name] = r.color
+for name, color in pairs(Config.RARITY_COLOR) do
+	RARITY_COLORS[name] = color
 end
 RARITY_COLORS["Brainrot God"] = Color3.fromRGB(255, 50, 200)
 RARITY_COLORS["OG"]           = Color3.fromRGB(255, 100, 0)
@@ -332,7 +328,7 @@ end
 -- A* search. Used to reject isolated walkable patches (islands in water pools).
 local function isTileReachable(tx: number, tz: number, targetX: number, targetZ: number): boolean
 	-- Quick Manhattan pre-check: if already close, skip pathfinding
-	if manhattan(tx, tz, targetX, targetZ) <= 2 then return true end
+	if Config.manhattan(tx, tz, targetX, targetZ) <= 2 then return true end
 
 	local function isWalkableNoEnemy(px, pz)
 		return TileGrid.IsWalkable(px, pz)
@@ -362,7 +358,7 @@ function EnemyService.Spawn(spawnDef)
 
 	local id = newId()
 	if isTileOccupied(spawnDef.tx, spawnDef.tz)
-		or isPlayerTileOccupied(spawnDef.tx, spawnDef.tz) then
+		or isPlayerTileReserved(spawnDef.tx, spawnDef.tz) then
 		warn("[EnemyService] Spawn tile occupied: "
 			.. tostring(spawnDef.tx) .. "," .. tostring(spawnDef.tz))
 		return nil
@@ -445,7 +441,7 @@ local function getClosestPlayerTile(fromX: number, fromZ: number)
 		local humanoid  = character and character:FindFirstChildOfClass("Humanoid")
 		local tx, tz    = MovementService.GetPlayerTile(player)
 		if tx and humanoid and humanoid.Health > 0 then
-			local d = manhattan(fromX, fromZ, tx, tz)
+			local d = Config.manhattan(fromX, fromZ, tx, tz)
 			if d < bestDist then
 				bestDist   = d
 				bestPlayer = player
@@ -556,7 +552,7 @@ function EnemyService._AILoop(id: string)
 			local cx2 = m:GetAttribute("CurrentTileX")
 			local cz2 = m:GetAttribute("CurrentTileZ")
 
-			if manhattan(cx2, cz2, sx, sz) > leashRange then
+			if Config.manhattan(cx2, cz2, sx, sz) > leashRange then
 				m:SetAttribute("State", "return")
 			else
 				-- FIX: re-query player distance from the current (up-to-date) tile,
@@ -565,7 +561,7 @@ function EnemyService._AILoop(id: string)
 
 				if not targetPlayer or dist2 > aggroRange * 1.5 then
 					m:SetAttribute("State", "wander")
-				elseif manhattan(cx2, cz2, ptx2, ptz2) <= 1 then
+				elseif Config.manhattan(cx2, cz2, ptx2, ptz2) <= 1 then
 					-- dist==0 (same tile) or dist==1 (adjacent): both count as attack range.
 					-- This prevents the chase↔attack thrash loop when a player somehow
 					-- ends up on the same tile as an enemy.
@@ -577,11 +573,11 @@ function EnemyService._AILoop(id: string)
 
 					local goals = { {ptx2+1,ptz2}, {ptx2-1,ptz2}, {ptx2,ptz2+1}, {ptx2,ptz2-1} }
 					table.sort(goals, function(a, b)
-						return manhattan(cx2, cz2, a[1], a[2]) < manhattan(cx2, cz2, b[1], b[2])
+						return Config.manhattan(cx2, cz2, a[1], a[2]) < Config.manhattan(cx2, cz2, b[1], b[2])
 					end)
 
 					local bestStep = nil
-					local bestStepDist = manhattan(cx2, cz2, ptx2, ptz2)
+					local bestStepDist = Config.manhattan(cx2, cz2, ptx2, ptz2)
 
 					for _, goal in ipairs(goals) do
 						local gx, gz = goal[1], goal[2]
@@ -590,7 +586,7 @@ function EnemyService._AILoop(id: string)
 							local candidate = Pathfinder.FindPath(isPassableC, cx2, cz2, gx, gz, 150)
 							if candidate and #candidate > 0 then
 								local step = candidate[1]
-								local stepDist = manhattan(step[1], step[2], ptx2, ptz2)
+								local stepDist = Config.manhattan(step[1], step[2], ptx2, ptz2)
 								if stepDist < bestStepDist then
 									bestStep = step
 									bestStepDist = stepDist
@@ -604,7 +600,7 @@ function EnemyService._AILoop(id: string)
 						for _, off in ipairs(offsets) do
 							local nx, nz = cx2 + off[1], cz2 + off[2]
 							if isPassableC(nx, nz) then
-								local d = manhattan(nx, nz, ptx2, ptz2)
+								local d = Config.manhattan(nx, nz, ptx2, ptz2)
 								if d < bestStepDist then
 									bestStep = { nx, nz }
 									bestStepDist = d
@@ -633,7 +629,7 @@ function EnemyService._AILoop(id: string)
 			local cx2 = m:GetAttribute("CurrentTileX")
 			local cz2 = m:GetAttribute("CurrentTileZ")
 
-			if manhattan(cx2, cz2, sx, sz) > leashRange then
+			if Config.manhattan(cx2, cz2, sx, sz) > leashRange then
 				m:SetAttribute("State", "return")
 			elseif not targetPlayer then
 				m:SetAttribute("State", "wander")
@@ -781,7 +777,7 @@ local function queueRespawn(zoneId: string)
 
 		local ZoneService = require(script.Parent.ZoneService)
 		local tx, tz = ZoneService.GetRandomTileInZone(zoneId)
-		if tx and tz and not isTileOccupied(tx, tz) and not isPlayerTileOccupied(tx, tz) then
+		if tx and tz and not isTileOccupied(tx, tz) and not isPlayerTileReserved(tx, tz) then
 			local spawnPool = ZoneData.BuildSpawnPool(zone)
 			local entry = ZoneData.PickEnemy(zone, spawnPool)
 			if entry then
@@ -854,33 +850,6 @@ function EnemyService.GetEnemy(id: string)
 	return enemies[id]
 end
 
-function EnemyService.GetEnemyAtTile(tx: number, tz: number): Model?
-	for _, model in pairs(enemies) do
-		if model:GetAttribute("State") ~= "dead" then
-			if model:GetAttribute("CurrentTileX") == tx
-				and model:GetAttribute("CurrentTileZ") == tz then
-				return model
-			end
-		end
-	end
-	return nil
-end
-
-function EnemyService.IsTileOccupied(tx: number, tz: number)
-	return isTileOccupied(tx, tz)
-end
-
-function EnemyService.IsCurrentTileOccupied(tx: number, tz: number)
-	for _, model in pairs(enemies) do
-		if isModelBlockingTile(model, tx, tz)
-			and model:GetAttribute("CurrentTileX") == tx
-			and model:GetAttribute("CurrentTileZ") == tz then
-			return true
-		end
-	end
-	return false
-end
-
 function EnemyService.IsTileBlockedForPlayers(tx: number, tz: number)
 	if isTileOccupied(tx, tz) then return true end
 	for _, model in pairs(enemies) do
@@ -947,7 +916,7 @@ do
 					if TileGrid.IsWalkable(cx, cz)
 						and TileGrid.GetZone(cx, cz) == zone.id
 						and not isTileOccupied(cx, cz)
-						and not isPlayerTileOccupied(cx, cz) then
+						and not isPlayerTileReserved(cx, cz) then
 						tx, tz = cx, cz
 					end
 

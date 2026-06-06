@@ -119,7 +119,22 @@ local function advanceServerTiles(userId, path, speed, seq)
 		task.wait(speed)
 		-- Abort if the sequence changed (new path / cancel / death)
 		if playerMoveSeq[userId] ~= seq then return end
-		playerTiles[userId] = { tx = path[i][1], tz = path[i][2] }
+
+		local nextTx, nextTz = path[i][1], path[i][2]
+
+		-- Mid-path check: if an enemy has moved to the next tile, stop here
+		local es = getEnemyService()
+		if es.IsTileBlockedForPlayers and es.IsTileBlockedForPlayers(nextTx, nextTz) then
+			playerDest[userId] = nil
+			-- Notify client to snap to the last safe tile
+			local plr = Players:GetPlayerByUserId(userId)
+			if plr then
+				PlayerMoved:FireClient(plr, userId, path[i-1][1], path[i-1][2], nil, 0)
+			end
+			return
+		end
+
+		playerTiles[userId] = { tx = nextTx, tz = nextTz }
 	end
 	-- Walk complete — clear destination
 	if playerMoveSeq[userId] == seq then
@@ -255,8 +270,20 @@ function MovementService.GetEffectiveTile(player)
 	return nil, nil
 end
 
-function MovementService.IsPlayerTileOccupied(tx, tz, exceptPlayer)
-	return isPlayerTileOccupied(tx, tz, exceptPlayer)
+-- Returns true if any player currently occupies OR is pathing toward (tx, tz).
+-- Used by EnemyService so enemies don't path to tiles players are heading to.
+function MovementService.IsTileReservedForPlayer(tx, tz)
+	for _, tile in pairs(playerTiles) do
+		if tile.tx == tx and tile.tz == tz then
+			return true
+		end
+	end
+	for _, dest in pairs(playerDest) do
+		if dest.tx == tx and dest.tz == tz then
+			return true
+		end
+	end
+	return false
 end
 
 -- Seconds-per-tile tween time for this player (lower = faster).

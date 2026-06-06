@@ -67,6 +67,35 @@ for i, r in ipairs(Config.RARITIES) do
 	Config.RARITY_INDEX[r.name] = i
 end
 
+-- Derived lookup tables (avoids duplicating in every consumer)
+Config.RARITY_COLOR = {}
+Config.RARITY_ORDER = {}
+for i, r in ipairs(Config.RARITIES) do
+	Config.RARITY_COLOR[r.name] = r.color
+	Config.RARITY_ORDER[r.name] = i
+end
+
+-- ─── Equipment Slots ──────────────────────────────────────────────────────────
+Config.EQUIP_SLOTS = {
+	weapon = true, offhand = true,
+	helmet = true, chest  = true,
+	legs   = true, boots  = true,
+}
+
+-- ─── Utility ──────────────────────────────────────────────────────────────────
+function Config.manhattan(ax: number, az: number, bx: number, bz: number): number
+	return math.abs(ax - bx) + math.abs(az - bz)
+end
+
+function Config.getEnemyFromPart(part: BasePart)
+	local obj = part
+	while obj do
+		if obj:IsA("Model") and obj:GetAttribute("EnemyId") then return obj end
+		obj = obj.Parent
+	end
+	return nil
+end
+
 -- ─── Reroll ───────────────────────────────────────────────────────────────────
 -- Combining 3 items rerolls into a rarity between (lowestInput) and (ceiling).
 -- Ceiling = min(highestInput + 1 tier, MAX_RARITY).

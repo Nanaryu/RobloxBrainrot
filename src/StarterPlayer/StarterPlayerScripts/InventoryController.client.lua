@@ -13,6 +13,8 @@ local GetEquipment     = Remotes:WaitForChild("GetEquipment")
 local EquipRequest     = Remotes:WaitForChild("EquipRequest")
 local UnequipRequest   = Remotes:WaitForChild("UnequipRequest")
 
+local Config = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"))
+
 local scrollFrame    = nil
 local templateSlot   = nil
 local mainGui        = nil
@@ -26,27 +28,12 @@ local pendingEquip   = nil
 local FADE_IN  = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local FADE_OUT = TweenInfo.new(0.1,  Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
-local RARITY_COLOR = {
-	Common    = Color3.fromRGB(180, 180, 180),
-	Rare      = Color3.fromRGB( 80, 120, 255),
-	VeryRare  = Color3.fromRGB( 50, 200, 180),
-	Epic      = Color3.fromRGB(163,  53, 238),
-	Legendary = Color3.fromRGB(255, 165,   0),
-	Mythic    = Color3.fromRGB(220,  20,  60),
-	Secret    = Color3.fromRGB(255, 215,   0),
-}
-
-local RARITY_ORDER = {
-	Common=1, Rare=2, VeryRare=3, Epic=4, Legendary=5, Mythic=6, Secret=7
-}
+local RARITY_COLOR = Config.RARITY_COLOR
+local RARITY_ORDER = Config.RARITY_ORDER
 
 local PLACEHOLDER_ICON = "rbxassetid://101140058690765"
 
-local EQUIP_SLOTS = {
-	weapon = true, offhand = true,
-	helmet = true, chest  = true,
-	legs   = true, boots  = true,
-}
+local EQUIP_SLOTS = Config.EQUIP_SLOTS
 
 local function buildTooltip()
 	-- Create a dedicated ScreenGui so tooltip always renders above the main GUI
