@@ -1,9 +1,6 @@
 -- StarterPlayer/StarterPlayerScripts/CombatController.client.lua
--- Click-to-attack system with walk-to-enemy.
--- Click enemy → RequestAttack → server walks player to enemy → auto-attack.
--- Also handles: HP bar sync, screen flash on damage, hit sound.
--- Skips input when TargetingController (hold-E) is active.
--- Q-targeting ring visuals are handled by QTargetingController.
+-- Handles: HP bar sync, screen flash on damage, hit sound, target cleanup.
+-- Click-to-attack removed — combat is initiated only via QTargetingController.
 
 local Players           = game:GetService("Players")
 local TweenService      = game:GetService("TweenService")
@@ -16,7 +13,6 @@ local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local AttackResult  = Remotes:WaitForChild("AttackResult")
 local TakeDamage    = Remotes:WaitForChild("TakeDamage")
 local EnemyHPUpdate = Remotes:WaitForChild("EnemyHPUpdate")
-local RequestAttack = Remotes:WaitForChild("RequestAttack")
 local StopAttack    = Remotes:WaitForChild("StopAttack")
 local EnemyDied     = Remotes:WaitForChild("EnemyDied")
 
@@ -24,32 +20,14 @@ local player   = Players.LocalPlayer
 local hrp      = nil
 local humanoid = nil
 
--- Lazy-loaded reference to hold-Q targeting system
-local TargetingController = nil
-local function isQTargetingActive()
-	if not TargetingController then
-		local ok, mod = pcall(require, script.Parent:WaitForChild("TargetingController"))
-		if ok then TargetingController = mod end
-	end
-	return TargetingController and TargetingController.IsActive()
-end
-
 -- ─── Attack state ────────────────────────────────────────────────────────────
 local currentTarget:   Model?  = nil
 local currentTargetId: string? = nil
-local attackMode = false
 
 -- ─── Target management ────────────────────────────────────────────────────────
-local function setTarget(model: Model?)
-	currentTarget   = model
-	currentTargetId = model and model:GetAttribute("EnemyId") or nil
-	attackMode      = model ~= nil
-end
-
 local function clearTarget()
 	currentTarget   = nil
 	currentTargetId = nil
-	attackMode      = false
 end
 
 -- ─── Character setup ──────────────────────────────────────────────────────────
@@ -76,32 +54,6 @@ local function playSound(soundId, parent)
 	s.Ended:Connect(function() s:Destroy() end)
 	task.delay(3, function() if s.Parent then s:Destroy() end end)
 end
-
--- ─── Click-to-attack ──────────────────────────────────────────────────────────
-local mouse = player:GetMouse()
-mouse.Button1Down:Connect(function()
-	if not humanoid or humanoid.Health <= 0 then return end
-	if isQTargetingActive() then return end
-
-	local target = mouse.Target
-	if not target then return end
-
-	local enemyModel = Config.getEnemyFromPart(target)
-	if enemyModel and enemyModel:GetAttribute("State") ~= "dead" then
-		local enemyId = enemyModel:GetAttribute("EnemyId")
-		if enemyId then
-			setTarget(enemyModel)
-			RequestAttack:FireServer(enemyId)
-			return
-		end
-	end
-
-	-- Clicked on non-enemy → clear target
-	if currentTarget then
-		StopAttack:FireServer()
-		clearTarget()
-	end
-end)
 
 -- ─── Escape key → deselect ────────────────────────────────────────────────────
 UserInputService.InputBegan:Connect(function(input, gameProcessed)

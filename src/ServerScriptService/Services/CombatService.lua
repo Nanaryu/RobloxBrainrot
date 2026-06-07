@@ -427,6 +427,31 @@ StopAttack.OnServerEvent:Connect(function(player: Player)
 	stopLoop(player)
 end)
 
+-- ─── Enemy died → immediately clear all players targeting it ──────────────────
+-- Register a hook with EnemyService so it can notify us when any enemy dies.
+local function onEnemyDied(enemyId: string)
+	for userId, targetId in pairs(attackTarget) do
+		if targetId == enemyId then
+			attackTarget[userId] = nil
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr.UserId == userId then
+					stopChase(plr)
+					stopLoop(plr)
+					break
+				end
+			end
+		end
+	end
+end
+
+-- Hook into EnemyService kill
+do
+	local es = getEnemyService()
+	if es.RegisterOnKill then
+		es.RegisterOnKill(onEnemyDied)
+	end
+end
+
 -- ─── Player lifecycle ─────────────────────────────────────────────────────────
 local function setupPlayer(player: Player)
 	player.CharacterAdded:Connect(function(character)

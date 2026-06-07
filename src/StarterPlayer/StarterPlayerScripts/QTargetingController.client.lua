@@ -215,42 +215,6 @@ local function destroyVisuals()
 	end
 end
 
--- ── Locked ring (persists after Q release until target dies / combat cancelled)
-local function stopLockedRing()
-	if not lockedRingActive then return end
-	lockedRingActive = false
-	if lockedRingConn then lockedRingConn:Disconnect(); lockedRingConn = nil end
-	lockedRingEnemy = nil
-	lockedRingId    = nil
-	destroyVisuals()
-end
-
-local function startLockedRing(enemy, enemyId)
-	stopLockedRing()
-	lockedRingActive = true
-	lockedRingEnemy  = enemy
-	lockedRingId     = enemyId
-
-	setRingVisible(true)
-	setOrbVisible(false)
-	setChainVisible(false)
-
-	lockedRingConn = RunService.RenderStepped:Connect(function(dt)
-		if not lockedRingActive then return end
-		if not lockedRingEnemy or not lockedRingEnemy.Parent then
-			stopLockedRing(); return
-		end
-		if lockedRingEnemy:GetAttribute("State") == "dead" then
-			stopLockedRing(); return
-		end
-		local enemyPos = lockedRingEnemy:GetPivot().Position
-		local centrePos = Vector3.new(enemyPos.X, Config.TILE_HEIGHT, enemyPos.Z)
-		updateRing(centrePos, dt)
-		if orbPart  then orbPart.CFrame  = CFrame.new(enemyPos) end
-		if orbShell then orbShell.CFrame = CFrame.new(enemyPos) end
-	end)
-end
-
 -- ── Visibility helpers ────────────────────────────────────────────────────────
 local function setRingVisible(v)
 	for _,a in ipairs(outerArcs) do a.Transparency = v and 0.05 or 1 end
@@ -399,6 +363,42 @@ local function updateRing(centrePos, dt)
 	if ringAnchor then
 		ringAnchor.CFrame = CFrame.new(centrePos.X, ringY, centrePos.Z)
 	end
+end
+
+-- ── Locked ring (persists after Q release until target dies / combat cancelled)
+local function stopLockedRing()
+	if not lockedRingActive then return end
+	lockedRingActive = false
+	if lockedRingConn then lockedRingConn:Disconnect(); lockedRingConn = nil end
+	lockedRingEnemy = nil
+	lockedRingId    = nil
+	destroyVisuals()
+end
+
+local function startLockedRing(enemy, enemyId)
+	stopLockedRing()
+	lockedRingActive = true
+	lockedRingEnemy  = enemy
+	lockedRingId     = enemyId
+
+	setRingVisible(true)
+	setOrbVisible(false)
+	setChainVisible(false)
+
+	lockedRingConn = RunService.RenderStepped:Connect(function(dt)
+		if not lockedRingActive then return end
+		if not lockedRingEnemy or not lockedRingEnemy.Parent then
+			stopLockedRing(); return
+		end
+		if lockedRingEnemy:GetAttribute("State") == "dead" then
+			stopLockedRing(); return
+		end
+		local enemyPos = lockedRingEnemy:GetPivot().Position
+		local centrePos = Vector3.new(enemyPos.X, Config.TILE_HEIGHT, enemyPos.Z)
+		updateRing(centrePos, dt)
+		if orbPart  then orbPart.CFrame  = CFrame.new(enemyPos) end
+		if orbShell then orbShell.CFrame = CFrame.new(enemyPos) end
+	end)
 end
 
 -- ── Per-frame loop ────────────────────────────────────────────────────────────

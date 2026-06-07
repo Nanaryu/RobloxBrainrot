@@ -634,6 +634,43 @@ Reroll: 3 items → weighted roll between lowest input rarity and (highest+1), c
 
 ---
 
+## 🧠 Luau / Roblox Rules (always follow)
+
+### Forward declarations
+- In Luau, `local f; f = function() ... end` is valid — the upvalue captures the **variable**, not the value. Deferred callbacks (`task.defer`, `task.spawn`) see the assigned function by call time. This is the canonical pattern for circular runtime dependencies.
+- `local` variables are NOT hoisted in Luau. A `local function foo()` defined on line 100 is **nil** on line 99. Always order definitions so callees appear **before** callers. If that's impossible (circular), use forward-declared variables.
+
+### RemoteEvent / RemoteFunction
+- **`:FireServer()`** — Client → Server. Only works inside LocalScripts or ModuleScripts required by LocalScripts.
+- **`:FireAllClients()` / `:FireClient(player, ...)`** — Server → Client. Only works inside Scripts (server).
+- **`OnServerEvent:Connect(fn)`** — Server listens for `:FireServer()`. `fn` receives `(player, ...args)`.
+- **`OnClientEvent:Connect(fn)`** — Client listens for `:FireAllClients()` or `:FireClient()`. `fn` receives `(...args)` — **no player argument** (the client knows it's itself).
+- **`:InvokeServer()` / `OnServerInvoke`** — synchronous Client→Server request (RemoteFunction). Avoid for frequent calls; prefer async RemoteEvents.
+- A Server→Client remote (like `EnemyDied:FireAllClients`) **cannot** have `OnServerEvent` on the server — that only exists for client→server direction. To hook server-side logic into a kill event, use a callback/hook pattern instead.
+
+### ModuleScript vs LocalScript vs Script
+- `ModuleScript` (`.lua`): returns a table. Can be `require()`d from any context. Runs once, cached.
+- `LocalScript` (`.client.lua`): runs on client only. Cannot be `require()`d by other scripts (including other LocalScripts).
+- `Script` (`.server.lua`): runs on server only.
+- To share state between a LocalScript and a ModuleScript on the same side: the ModuleScript can reference the LocalScript's `script.Parent` or use shared Player attributes.
+- **Never** `require()` a LocalScript — it will fail. Use `Player.PlayerScripts:WaitForChild()` + a shared module or attribute-based communication instead.
+
+### Attribute-based cross-script communication
+- When two LocalScripts (e.g., MovementController and QTargetingController) need to signal each other and `require()` is impossible, use `Player:SetAttribute("Key", value)` + `Player:GetAttributeChangedSignal("Key")`. Always clean up: set to `nil` after handling to avoid stale state.
+
+### Roblox CFrame / animation gotchas
+- `Humanoid.WalkSpeed = 0` does NOT prevent `AnimationTrack:Play()` from working, but `Enum.AnimationPriority.Movement` animations are suppressed when the Humanoid considers itself idle (MoveDirection = 0). Use `Enum.AnimationPriority.Action` for manually-controlled animations.
+- `HumanoidRootPart.Anchored = true` + direct `CFrame` writes = correct pattern for tile-based movement. The Humanoid's built-in movement is bypassed entirely.
+- Setting `humanoid.AutoRotate = false` prevents the Humanoid from overriding facing direction — required for manual CFrame rotation.
+
+### Token-based coroutine invalidation
+- When cancelling concurrent coroutines (movement paths, chase loops), use integer tokens. The pattern: increment token → snapshot token → loop while token == snapshot. Stale coroutines **must not** touch shared state (`isMoving`, `walkPlaying`, etc.) — only the newest coroutine owns those flags. A stale coroutine that calls `stopWalk()` or `stopLoop()` on the new coroutine's animation will break it.
+
+### Server tile tracking
+- Server-side `playerTiles[userId]` advances via `task.wait(speed)` inside `advanceServerTiles`. It does NOT track sub-tile positions. Client-side `currentTileX/Z` updates when `slideToWorld` completes each step. During mid-slide, both are behind the visual position. When pathfinding origin matters, use the visual position or the step target, not the stale tile.
+
+---
+
 ## 🎯 Rucoy Online Formulas (reference: `damage_formulas/formulas.js`)
 
 ### Character Level XP (grind rate section)

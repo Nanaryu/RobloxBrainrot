@@ -454,13 +454,25 @@ local function getClosestPlayerTile(fromX: number, fromZ: number)
 end
 
 -- ─── Wander target ────────────────────────────────────────────────────────────
-local function pickWanderTarget(model: Model, id: string): (number, number)
+local function pickWanderTarget(model: Model, id: string, biasX: number?, biasZ: number?): (number, number)
 	local sx    = model:GetAttribute("SpawnTileX")
 	local sz    = model:GetAttribute("SpawnTileZ")
 	local range = model:GetAttribute("WanderRange")
+
+	-- When a player is nearby, bias wander offsets toward them
+	local biasDx, biasDz = 0, 0
+	if biasX and biasZ then
+		local rawDx = biasX - sx
+		local rawDz = biasZ - sz
+		local len = math.max(1, math.abs(rawDx) + math.abs(rawDz))
+		biasDx = math.clamp(rawDx / len * range, -range, range)
+		biasDz = math.clamp(rawDz / len * range, -range, range)
+	end
+
 	for _ = 1, 8 do
-		local dx = math.random(-range, range)
-		local dz = math.random(-range, range)
+		-- 50% biased direction + 50% random spread
+		local dx = math.clamp(math.floor(biasDx + math.random(-range, range)), -range, range)
+		local dz = math.clamp(math.floor(biasDz + math.random(-range, range)), -range, range)
 		local tx = math.clamp(sx + dx, 1, Config.GRID_WIDTH)
 		local tz = math.clamp(sz + dz, 1, Config.GRID_HEIGHT)
 		if isPassableForEnemy(tx, tz, id) then return tx, tz end
@@ -470,6 +482,12 @@ end
 
 -- ─── Damage accumulator forward declaration ───────────────────────────────────
 local queueDamage
+
+-- ─── On-kill hooks (CombatService registers to clear attackTarget) ───────────
+local onKillCallbacks = {}
+function EnemyService.RegisterOnKill(fn: (string) -> ())
+	table.insert(onKillCallbacks, fn)
+end
 
 -- ─── AI Loop ──────────────────────────────────────────────────────────────────
 function EnemyService._AILoop(id: string)
@@ -513,7 +531,12 @@ function EnemyService._AILoop(id: string)
 				local function isPassableW(tx, tz)
 					return isPassableForEnemy(tx, tz, id)
 				end
-				local wx, wz = pickWanderTarget(model, id)
+				-- Bias wander toward nearby players so enemies drift toward them
+				local biasX, biasZ = nil, nil
+				if targetPlayer and dist <= aggroRange * 2 then
+					biasX, biasZ = ptx, ptz
+				end
+				local wx, wz = pickWanderTarget(model, id, biasX, biasZ)
 				local path = Pathfinder.FindPath(isPassableW, cx, cz, wx, wz, 200)
 
 				if path and #path > 0 then
@@ -799,6 +822,11 @@ function EnemyService._Kill(id: string, killer: Player?)
 	if not model then return end
 
 	model:SetAttribute("State", "dead")
+
+	-- Notify combat system so it clears attackTarget for all players
+	for _, fn in ipairs(onKillCallbacks) do
+		fn(id)
+	end
 
 	local dtx     = model:GetAttribute("CurrentTileX")
 	local dtz     = model:GetAttribute("CurrentTileZ")
