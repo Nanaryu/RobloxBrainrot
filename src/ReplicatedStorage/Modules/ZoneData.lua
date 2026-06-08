@@ -40,7 +40,7 @@ ZoneData.ZONES = {
 		},
 		tileMaterial = Enum.Material.Grass,
 		spawnDensity = 0.012,
-		leashRange   = 6,
+		leashRange   = 20,
 	},
 	{
 		id          = "Desert",
@@ -56,7 +56,7 @@ ZoneData.ZONES = {
 		},
 		tileMaterial = Enum.Material.Sand,
 		spawnDensity = 0.012,
-		leashRange   = 6,
+		leashRange   = 20,
 	},
 	{
 		id          = "Swamp",
@@ -72,7 +72,7 @@ ZoneData.ZONES = {
 		},
 		tileMaterial = Enum.Material.Mud,
 		spawnDensity = 0.012,
-		leashRange   = 6,
+		leashRange   = 20,
 	},
 	{
 		id          = "Volcano",
@@ -88,7 +88,7 @@ ZoneData.ZONES = {
 		},
 		tileMaterial = Enum.Material.Slate,
 		spawnDensity = 0.012,
-		leashRange   = 6,
+		leashRange   = 20,
 	},
 }
 
